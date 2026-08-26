@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>데일리 시황 브리프</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3/packages/wanted-sans/fonts/webfonts/variable/split/WantedSansVariable.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--sans:'Wanted Sans Variable','Wanted Sans','Pretendard Variable',Pretendard,-apple-system,system-ui,sans-serif;--mono:'Geist Mono','SF Mono',ui-monospace,monospace;--canvas:#F5F6F8;--panel:#FFF;--panel-2:#F0F2F5;--line:#E2E6EC;--line-soft:#EDF0F4;--ink:#0D131F;--ink-2:#525C6E;--ink-3:#8B95A6;--kr-up:#E0342B;--kr-down:#1F5FD0;--us-up:#05966E;--us-down:#E0342B;--accent:#3B2FD9;--shadow:0 1px 2px rgba(13,19,31,.05),0 8px 24px -12px rgba(13,19,31,.12)}
+html[data-theme=dark]{--canvas:#0A0D14;--panel:#131822;--panel-2:#1A2029;--line:#242C3A;--line-soft:#1C2330;--ink:#EEF2F8;--ink-2:#98A3B5;--ink-3:#667184;--kr-up:#FF5449;--kr-down:#5B94FF;--us-up:#22C08D;--us-down:#FF5449;--accent:#8A7BFF;--shadow:none}
+*{box-sizing:border-box;margin:0;padding:0}html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}body{background:var(--canvas);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.62;letter-spacing:-.014em;font-weight:450;padding-bottom:72px}.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}.wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+.sticky{position:sticky;top:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);transform:translateY(-100%);transition:transform .22s}.sticky.on{transform:translateY(0)}.sticky-in{max-width:1120px;margin:auto;padding:9px 22px;display:flex;gap:22px;align-items:center;font-family:var(--mono);font-size:12.5px;overflow-x:auto;white-space:nowrap}.sticky-in b{font-weight:500;color:var(--ink-3);margin-right:6px;font-size:11px}
+header{padding:36px 0 0}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}h1{font-size:34px;font-weight:800;letter-spacing:-.042em;line-height:1.12;margin-top:7px}.date{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);text-align:right;line-height:1.8}.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;background:var(--panel-2);color:var(--ink-2);font-size:11px}.pill i{width:6px;height:6px;border-radius:50%;background:var(--kr-up);animation:blink 2.4s infinite}.toggle{margin-top:9px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;background:none;border:1px solid var(--line);color:var(--ink-2);padding:5px 11px;border-radius:999px;cursor:pointer}@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.key{margin:26px 0 30px;display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}.key>div{padding:19px 21px;border-right:1px solid var(--line-soft)}.key>div:last-child{border:0}.k-tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--accent);font-weight:500;margin-bottom:7px}.k-txt{font-size:14.5px;line-height:1.55;color:var(--ink-2)}.k-txt b{color:var(--ink)}
+.grid8{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:44px}.tick{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px 14px;box-shadow:var(--shadow);position:relative;overflow:hidden}.tick:before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--bar)}.nm{font-size:13px;font-weight:600;color:var(--ink-2);display:flex;justify-content:space-between}.nm em{font-family:var(--mono);font-size:9.5px;font-style:normal;color:var(--ink-3)}.v{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:9px}.c{font-family:var(--mono);font-size:13px;font-weight:500;margin-top:5px}.up-kr{color:var(--kr-up)}.down-kr{color:var(--kr-down)}.up-us{color:var(--us-up)}.down-us{color:var(--us-down)}.flat{color:var(--ink-3)}
+section{margin-bottom:44px}.sec{display:flex;align-items:baseline;gap:13px;margin-bottom:18px}.sec h2{font-size:21px;font-weight:800}.note{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}.cols,.lead{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card,.lcard,.rail-box,.sched div{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}.card{padding:22px 23px}.card h3{font-size:15px;margin-bottom:12px}.tag{font-family:var(--mono);font-size:9.5px;padding:3px 7px;border-radius:5px;background:var(--panel-2);color:var(--ink-3)}.lede{font-size:14.5px;color:var(--ink-2);line-height:1.66;padding-bottom:15px;margin-bottom:15px;border-bottom:1px solid var(--line-soft)}.lede b,.pts b,.gap-txt b,.bnote b,.tr b{color:var(--ink)}ul.pts{list-style:none;display:flex;flex-direction:column;gap:12px}ul.pts li{font-size:14px;color:var(--ink-2);line-height:1.6;padding-left:15px;position:relative}ul.pts li:before{content:'';position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:50%;background:var(--line)}
+.rail-box{padding:30px 32px 24px}.rail{position:relative;height:14px;border-radius:999px;margin:66px 0 12px;background:linear-gradient(90deg,#1F5FD0,#4E86E8 22%,#98A3B5 44%,#A8A2B8 56%,#E88A5A 76%,#E0342B)}.gapband{position:absolute;top:-7px;bottom:-7px;border-radius:6px;background:var(--panel);opacity:.16;border-left:1px dashed var(--ink-2);border-right:1px dashed var(--ink-2)}.pin{position:absolute;top:-58px;transform:translateX(-50%);width:150px;text-align:center}.pin.low{top:26px}.p-lab{font-family:var(--mono);font-size:10px;color:var(--ink-3)}.p-val{font-family:var(--mono);font-size:32px;font-weight:600}.pin:after{content:'';position:absolute;left:50%;bottom:-14px;width:2px;height:14px;background:var(--ink-2)}.pin.low:after{top:-14px;bottom:auto}.zones{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-top:72px}.gap-txt{font-size:14px;color:var(--ink-2);line-height:1.65;border-top:1px solid var(--line-soft);margin-top:20px;padding-top:18px}.comp{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-top:16px}.comp div{background:var(--panel-2);border-radius:9px;padding:11px 12px}.cl{font-size:11px;color:var(--ink-3)}.cv{font-family:var(--mono);font-size:13px}
+.stk{display:flex;flex-direction:column}.stk-row{display:grid;grid-template-columns:96px 66px 1fr;gap:13px;padding:13px 0;border-bottom:1px solid var(--line-soft)}.stk-row:last-child{border:0}.s-nm{font-size:14px;font-weight:700}.s-pc{font-family:var(--mono);font-size:13.5px;font-weight:600;text-align:right}.s-ws{font-size:13px;color:var(--ink-2);line-height:1.55}
+.lcard{padding:22px 23px}.lcard h3{font-size:17px;font-weight:800;margin:7px 0 18px}.bars{display:flex;flex-direction:column;gap:8px}.brow{display:grid;grid-template-columns:82px 1fr 54px;align-items:center;gap:11px}.bl{font-size:12.5px;color:var(--ink-2);text-align:right}.btrack{height:20px;background:var(--panel-2);border-radius:5px;position:relative}.btrack:after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}.bfill{position:absolute;top:3px;bottom:3px;border-radius:3px;background:var(--accent);opacity:.9}.bfill.neg{background:var(--kr-down)}.bv{font-family:var(--mono);font-size:12.5px;text-align:right}.bnote{font-size:12px;color:var(--ink-3);line-height:1.55;margin-top:13px}.themes{margin-top:18px;border-top:1px solid var(--line-soft);padding-top:6px}.trow{display:grid;grid-template-columns:80px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid var(--line-soft)}.tl{font-size:12.5px;font-weight:800;color:var(--accent)}.tr{font-size:13px;color:var(--ink-2)}
+.sched{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.sched div{padding:16px 17px}.sd{font-family:var(--mono);font-size:10.5px;color:var(--accent)}.st{font-size:14.5px;font-weight:700;margin:7px 0 5px}.sn{font-size:12.5px;color:var(--ink-3)}
+footer{border-top:1px solid var(--line);padding-top:20px;font-size:12.5px;color:var(--ink-3);line-height:1.75}
+@media(max-width:960px){body{font-size:15px}h1{font-size:27px}.grid8{grid-template-columns:repeat(2,1fr)}.key{grid-template-columns:1fr}.key>div{border-right:0;border-bottom:1px solid var(--line-soft)}.key>div:last-child{border-bottom:0}.cols,.lead{grid-template-columns:1fr}.comp{grid-template-columns:1fr 1fr}.sched{grid-template-columns:1fr 1fr}.stk-row{grid-template-columns:84px 58px 1fr;gap:10px}.rail-box{padding:26px 18px 20px}.pin{width:112px}.pin .p-val{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="sticky" id="sticky"><div class="sticky-in" id="stickyIn"></div></div>
+<div class="wrap">
+<header><div class="top"><div><div class="kicker">Daily Market Brief · Korea &amp; US</div><h1>오늘의 시황</h1></div><div class="date"><div>2026. 08. 26 (수)</div><div><span class="pill"><i></i>국내 장중 · 미국 8/25 종가</span></div><div><button class="toggle" id="themeBtn">DARK</button></div></div></div></header>
+<div class="key" id="key"></div><div class="grid8" id="strip"></div>
+<section><div class="sec"><h2>장 코멘트</h2><div class="note">KR 8/25 종가 · US 8/25 종가</div></div><div class="cols"><div class="card"><h3>국내 증시 <span class="tag">KOSPI · KOSDAQ</span></h3><p class="lede" id="krLede"></p><ul class="pts" id="krPts"></ul></div><div class="card"><h3>미국 증시 <span class="tag">SPX · IXIC · DJIA</span></h3><p class="lede" id="usLede"></p><ul class="pts" id="usPts"></ul></div></div></section>
+<section><div class="sec"><h2>공포·탐욕 지표</h2><div class="note">0 극단적 공포 — 100 극단적 탐욕</div></div><div class="rail-box"><div class="rail"><div class="gapband" id="gapBand"></div><div class="pin" id="pinUS"></div><div class="pin low" id="pinKR"></div></div><div class="zones"><span>0</span><span>25 공포</span><span>45 중립</span><span>55 탐욕</span><span>100</span></div><p class="gap-txt" id="gapTxt"></p><div class="comp" id="comp"></div></div></section>
+<section><div class="sec"><h2>시총 상위 종목</h2><div class="note">국내 8/25 종가</div></div><div class="cols"><div class="card"><h3>코스피 대형주</h3><div class="stk" id="krStocks"></div></div><div class="card"><h3>미국 메가캡</h3><div class="stk" id="usStocks"></div></div></div></section>
+<section><div class="sec"><h2>월간 주도업종 · 주도주</h2><div class="note">8월 MTD</div></div><div class="lead"><div class="lcard"><div class="kicker">Korea · August</div><h3>코스닥이 코스피를 압도한 달</h3><div class="bars" id="krBars"></div><p class="bnote" id="krNote"></p><div class="themes" id="krThemes"></div></div><div class="lcard"><div class="kicker">US · August</div><h3>테크에서 에너지·헬스케어로</h3><div class="bars" id="usBars"></div><p class="bnote" id="usNote"></p><div class="themes" id="usThemes"></div></div></div></section>
+<section><div class="sec"><h2>이번 주 체크포인트</h2></div><div class="sched" id="sched"></div></section>
+<footer><b>데이터 기준</b> · 국내 8/25 종가(코스피 6,742.74 / 코스닥 827.15), 환율·금리 8/25 15:30 · 미국 8/25 종가 · CNN Fear &amp; Greed 8/25 기준 55<br><b>한국 심리지표</b>는 공식 지수가 아니라 등락률·수급·변동성·금리를 가중평균한 <b>자체 간이 산출치</b>입니다<br><b>갱신</b> · 파일 하단 <span class="mono">DATA</span> 객체만 수정하면 화면 전체가 갱신됩니다<br>본 자료는 정보 제공 목적이며 투자 권유가 아닙니다.</footer>
+</div>
+<script>
+const DATA={
+key:[
+{tag:'오늘 밤',txt:'<b>엔비디아 실적</b>이 이번 주의 전부입니다. 가이던스와 HBM 공급 병목 해소 여부에 국내 반도체 방향까지 묶여 있습니다.'},
+{tag:'국내',txt:'장중 <b>-4%</b>에서 되돌린 전약후강. 다만 외국인 <b>3조8,195억 순매도</b>는 아직 되돌려지지 않았습니다.'},
+{tag:'주도',txt:'8월은 <b>코스닥 +14.9%</b>와 원전·건설. 미국은 에너지·헬스케어가 끌고 <b>IT가 뒤처지는</b> 구도입니다.'}],
+strip:[
+{nm:'코스피',tag:'KOSPI',v:'6,742.74',c:'+45.55  +0.68%',d:1,mkt:'kr'},
+{nm:'코스닥',tag:'KOSDAQ',v:'827.15',c:'+13.83  +1.70%',d:1,mkt:'kr'},
+{nm:'S&P 500',tag:'SPX',v:'7,677.28',c:'+24.42  +0.32%',d:1,mkt:'us'},
+{nm:'나스닥',tag:'IXIC',v:'26,151.30',c:'+0.66%',d:1,mkt:'us'},
+{nm:'다우',tag:'DJIA',v:'53,579.94',c:'+160  +0.30%',d:1,mkt:'us'},
+{nm:'원/달러',tag:'USDKRW',v:'1,386.1',c:'+2.9원',d:1,mkt:'kr'},
+{nm:'국고채 3년',tag:'KTB 3Y',v:'3.830%',c:'-0.6bp',d:-1,mkt:'kr'},
+{nm:'비트코인',tag:'BTC',v:'$80,600',c:'+4.0%',d:1,mkt:'us'}],
+stickyKeys:['코스피','코스닥','S&P 500','나스닥'],
+krLede:'장중 <b>4% 넘게 급락</b>했다가 오후에 되돌린 전약후강. 저점 6,408.82에서 장중 고점 부근인 6,742.74로 마감했습니다. 외국인 <b>3조8,195억 순매도</b>를 개인·기관이 각각 1조513억·1조1,707억으로 받아냈습니다.',
+krPts:[
+'<b>원전·건설이 지수를 되살렸습니다.</b> 웨스팅하우스 지분 공동 인수 제안 보도에 한전기술 +20.3%, 현대건설 +14.9%, 대우건설 +11.8%, 두산에너빌리티 +10.6%. 산업부는 사실무근이라고 밝혔습니다.',
+'<b>반도체는 버텨준 수준.</b> 삼성전자 보합, SK하이닉스 +0.4%. 초반 급락분을 만회하면서 지수도 함께 반등했습니다.',
+'<b>업종 상승 우위.</b> 건설 +8.7%, 기계·장비 +6.7%, 전기·가스 +3.3%. 반면 통신 -1.4%, 제약 -0.9%.',
+'<b>코스닥은 소부장이 주도.</b> 심텍 +11.1%, HPSP +10.4%, 주성엔지니어링 +7.7%. 비트코인 8만달러 돌파로 가상자산주도 급등.'],
+usLede:'3대 지수 동반 상승. 대(對)캐나다 관세 격화와 보복관세 발표에도 <b>유가 하락 → 장기금리 안정</b>이 주가를 지지했습니다. S&amp;P 500은 사상 최고치에 다시 근접했습니다.',
+usPts:[
+'<b>엔비디아 실적이 이번 주 전부입니다.</b> 8/26 장 마감 후 발표. 7거래일 연속 하락을 끊고 +2.2%. 가이던스, HBM3E/HBM4 병목, CoWoS 캐파가 관전 포인트.',
+'<b>전날 눌렸던 반도체가 반등.</b> 8/24 마이크론 -5.8%, AMD -3.5%로 나스닥이 200p 밀렸으나 하루 만에 되돌림.',
+'<b>헬스케어가 상승을 주도.</b> 모더나가 흑색종 백신 데이터로 +14.4%, 지수 구성종목 중 최대 상승.',
+'<b>소매는 부진.</b> 딕스 스포팅굿즈가 풋락커 인수 부담에 -30.7%. 앞서 월마트도 6년래 최저 성장률에 -9%.'],
+fng:{us:{val:55,label:'중립 ~ 탐욕 경계',note:'전일 54.5 · 2주 전 61 (CNN 원지수)'},kr:{val:40,label:'공포',note:'자체 간이 산출 · 공식 지수 아님'},gap:'미국이 <b>15p 앞서</b> 있습니다. 미국은 중립권을 지키는 반면 국내는 장중 4% 급락과 외국인 대량 순매도로 공포권에 머물러 있습니다. 통상 미국 심리가 선행하고 국내가 후행하는 만큼, <b>격차가 좁혀지는지</b>가 단기 방향의 힌트입니다.',comp:[{l:'변동성 (30%)',v:'장중 -4.0%'},{l:'코스피 모멘텀 (25%)',v:'+0.68%'},{l:'코스닥 등락 (10%)',v:'+1.70%'},{l:'외국인 수급 (20%)',v:'-3.82조'},{l:'안전자산 선호 (15%)',v:'3Y -0.6bp'}]},
+krStocks:[
+{nm:'삼성전자',p:0,w:'주주환원 실망감이 이어지며 보합. 애플의 중국산 메모리 허용 가능성, YMTC의 IPO 신청도 장중 부담'},
+{nm:'SK하이닉스',p:.42,w:'엔비디아 실적 대기. HBM 공급 병목 해소 여부가 다음 방향을 결정'},
+{nm:'두산에너빌리티',p:10.55,w:'웨스팅하우스 지분 공동 인수 제안설. 미국 원전 전략이 개별 프로젝트로 구체화되는 국면'},
+{nm:'현대차',p:1.69,w:'CEO 인베스터 데이 로보틱스 전략 공개 기대. 기아 +2.59%'},
+{nm:'신한지주',p:3.10,w:'은행·보험·증권 동반 강세. KB금융 +2.02%'},
+{nm:'LG에너지솔루션',p:-3.45,w:'시총 상위 중 최대 낙폭. 2차전지 전반 약세'},
+{nm:'셀트리온',p:-2.27,w:'제약 업종 -0.89%로 지수 대비 부진'},
+{nm:'한화',p:17.40,w:'인적분할 후 변경상장 첫날 급등. 신설법인은 장중 상한가 후 강보합'}],
+usStocks:[
+{nm:'NVIDIA',p:2.19,w:'8/26 장 마감 후 실적. 7거래일 연속 하락을 끊음. AI 칩 가격 인상 통보가 앞선 반도체 투매의 빌미'},
+{nm:'Apple',p:null,w:'중국산 메모리 구매 허용 가능성 보도 — 삼성전자·SK하이닉스에 직접 영향. 7월 실적 후 -9%'},
+{nm:'Microsoft',p:null,w:'2Q 실적 후 +15%. 단일 종목 하루 시총 증가 사상 최대. Azure +27%'},
+{nm:'Alphabet',p:null,w:'2Q EPS 9.11달러로 컨센서스(약 3달러) 대폭 상회. 클라우드가 견인'},
+{nm:'Amazon',p:null,w:'AI·반도체 사업 각각 연환산 250억달러 런레이트 돌파, 광고 +26%'},
+{nm:'Meta',p:null,w:'AI 투자 전략 회의론으로 실적 후 시총 약 850억달러 증발'},
+{nm:'Tesla',p:null,w:'중국 대규모 리콜로 브랜드 신뢰 훼손 우려. 잉여현금흐름 마이너스 전환'},
+{nm:'Moderna',p:14.36,w:'흑색종 백신 데이터 발표. S&P 500 구성종목 중 최대 상승'}],
+krBars:[{l:'코스닥',v:14.9},{l:'코스피',v:2.2}],
+krNote:'7/31 종가 대비 8/25 종가. 7월 마지막 날 코스피 <b>+17.91%</b>(역대 최대 상승률) 급반등 직후라, 지수보다 <b>업종 간 격차</b>가 훨씬 큽니다.',
+krThemes:[
+{t:'반도체',d:'<b>SK하이닉스·삼성전자</b>가 지수의 중심. 소부장(심텍·HPSP·원익IPS·주성엔지니어링)이 코스닥 초과수익의 엔진'},
+{t:'원전·건설',d:'<b>두산에너빌리티·현대건설·한전기술</b>. 미국 원전 프로젝트 구체화 + 반도체 클러스터 전력 수요가 겹친 8월 최강 테마'},
+{t:'조선·방산',d:'<b>한화오션·HD한국조선해양·한화에어로스페이스</b>. 반도체 조정 구간의 대안 축'},
+{t:'금융',d:'<b>신한지주·KB금융·키움증권</b>. 밸류업 기조와 금리 하락이 동시에 우호적'},
+{t:'화장품',d:'<b>한국콜마·코스맥스</b>. K-뷰티 구조적 확장 기대로 신고가 종목 다수'},
+{t:'로봇·코인',d:'<b>레인보우로보틱스·로보티즈</b>, <b>우리기술투자</b>(비트코인 8만달러 돌파)'}],
+usBars:[{l:'에너지',v:12.1},{l:'금융',v:6.2},{l:'헬스케어',v:2.5},{l:'필수소비재',v:2.4},{l:'커뮤니케이션',v:1},{l:'산업재',v:-2.9},{l:'IT',v:-8}],
+usNote:'직전 확정 월간 섹터 수익률. 8월에도 <b>에너지·헬스케어 강세, IT 약세</b> 구도는 유지되고 있습니다.',
+usThemes:[
+{t:'에너지',d:'지정학 리스크와 AI 데이터센터 전력 수요로 12개월 <b>+41.7%</b>, 전 섹터 1위. 다만 8월 후반 유가는 되밀리는 중'},
+{t:'헬스케어',d:'선행 PER 약 <b>18배</b>로 IT의 28.5배 대비 저평가. 모더나처럼 개별 이벤트가 즉시 주가에 반영되는 국면'},
+{t:'금융',d:'장기금리 안정과 국채 바이백 확대 기대가 배경'},
+{t:'IT (부진)',d:'AI 자본지출 부담과 밸류에이션 논란. 다만 지수 비중 <b>38%</b>라 방향은 여전히 이 섹터에 묶여 있음'}],
+sched:[
+{d:'08 / 26 수',t:'엔비디아 실적',n:'미국 장 마감 후. 가이던스와 HBM 공급 병목'},
+{d:'08 / 27 목',t:'한국은행 금통위',n:'동결 전망 우세. 금융안정 이슈로 매파 기조 지속 예상'},
+{d:'금주',t:'잭슨홀 미팅',n:'케빈 워시 연준 의장의 첫 연설'},
+{d:'금주',t:'미국 PCE 물가',n:'연준이 선호하는 인플레이션 지표'}]};
+
+const $=id=>document.getElementById(id);
+const cls=(v,m)=>v===0?'flat':m==='kr'?(v>0?'up-kr':'down-kr'):(v>0?'up-us':'down-us');
+const cvar=(v,m)=>v===0?'var(--ink-3)':m==='kr'?(v>0?'var(--kr-up)':'var(--kr-down)'):(v>0?'var(--us-up)':'var(--us-down)');
+$('key').innerHTML=DATA.key.map(k=>`<div><div class="k-tag">${k.tag}</div><div class="k-txt">${k.txt}</div></div>`).join('');
+$('strip').innerHTML=DATA.strip.map(s=>`<div class="tick" style="--bar:${cvar(s.d,s.mkt)}"><div class="nm">${s.nm}<em>${s.tag}</em></div><div class="v">${s.v}</div><div class="c ${cls(s.d,s.mkt)}">${s.c}</div></div>`).join('');
+$('stickyIn').innerHTML=DATA.stickyKeys.map(k=>{const s=DATA.strip.find(x=>x.nm===k);return s?`<span><b>${s.nm}</b>${s.v} <span class="${cls(s.d,s.mkt)}">${s.c.split('  ').pop()}</span></span>`:''}).join('');
+$('krLede').innerHTML=DATA.krLede;$('usLede').innerHTML=DATA.usLede;$('krPts').innerHTML=DATA.krPts.map(p=>`<li>${p}</li>`).join('');$('usPts').innerHTML=DATA.usPts.map(p=>`<li>${p}</li>`).join('');
+const f=DATA.fng;$('pinUS').style.left=f.us.val+'%';$('pinUS').innerHTML=`<div class="p-lab">미국 · CNN</div><div class="p-val">${f.us.val}</div><div>${f.us.label}</div>`;$('pinKR').style.left=f.kr.val+'%';$('pinKR').innerHTML=`<div>${f.kr.label}</div><div class="p-val">${f.kr.val}</div><div class="p-lab">한국 · 간이</div>`;
+const lo=Math.min(f.kr.val,f.us.val),hi=Math.max(f.kr.val,f.us.val);$('gapBand').style.left=lo+'%';$('gapBand').style.width=(hi-lo)+'%';$('gapTxt').innerHTML=f.gap+`<span style="display:block;font-size:12px;color:var(--ink-3);margin-top:9px">미국 ${f.us.note} · 한국 ${f.kr.note}</span>`;$('comp').innerHTML=f.comp.map(c=>`<div><div class="cl">${c.l}</div><div class="cv">${c.v}</div></div>`).join('');
+const stk=(a,m)=>a.map(s=>{const t=s.p===null?'—':(s.p>0?'+':'')+s.p.toFixed(2)+'%';return `<div class="stk-row"><div class="s-nm">${s.nm}</div><div class="s-pc ${s.p===null?'flat':cls(s.p,m)}">${t}</div><div class="s-ws">${s.w}</div></div>`}).join('');
+$('krStocks').innerHTML=stk(DATA.krStocks,'kr');$('usStocks').innerHTML=stk(DATA.usStocks,'us');
+const bars=a=>{const m=Math.max(...a.map(b=>Math.abs(b.v)));return a.map(b=>{const w=Math.abs(b.v)/m*48,pos=b.v>=0?`left:50%;width:${w}%`:`left:${50-w}%;width:${w}%`;return `<div class="brow"><div class="bl">${b.l}</div><div class="btrack"><div class="bfill ${b.v<0?'neg':''}" style="${pos}"></div></div><div class="bv" style="color:${b.v<0?'var(--kr-down)':'var(--accent)'}">${b.v>0?'+':''}${b.v}%</div></div>`}).join('')};
+$('krBars').innerHTML=bars(DATA.krBars);$('krNote').innerHTML=DATA.krNote;$('usBars').innerHTML=bars(DATA.usBars);$('usNote').innerHTML=DATA.usNote;
+const th=a=>a.map(t=>`<div class="trow"><div class="tl">${t.t}</div><div class="tr">${t.d}</div></div>`).join('');$('krThemes').innerHTML=th(DATA.krThemes);$('usThemes').innerHTML=th(DATA.usThemes);
+$('sched').innerHTML=DATA.sched.map(s=>`<div><div class="sd">${s.d}</div><div class="st">${s.t}</div><div class="sn">${s.n}</div></div>`).join('');
+const sb=$('sticky');addEventListener('scroll',()=>sb.classList.toggle('on',scrollY>360),{passive:true});
+const btn=$('themeBtn');const set=t=>{document.documentElement.dataset.theme=t;btn.textContent=t==='dark'?'LIGHT':'DARK'};set(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');btn.onclick=()=>set(document.documentElement.dataset.theme==='dark'?'light':'dark');
+</script>
+</body>
+</html>

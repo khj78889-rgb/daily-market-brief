@@ -1,0 +1,4 @@
+﻿date,ticker,name,universe,setup,entry,stop,target,status,fill_date,fill,exit_date,exit,ret,r_mult
+20260917,033780,KT&G,KOSPI200,관찰,179179.00,173639.71,190257.57,대기,,,,,,
+20260917,055550,신한지주,KOSPI200,관찰,116616.50,110959.36,127930.79,대기,,,,,,
+20260917,105560,KB금융,KOSPI200,관찰,181881.70,173042.41,199560.27,대기,,,,,,

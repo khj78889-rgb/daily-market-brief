@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import html
 import sys
 import time
@@ -45,6 +46,8 @@ CFG = {
     "stop_pct": 0.07,            # 최대 손절 -7%
     "target_pct": 0.10,          # 1차 목표 +10%
     "hold_days": 5,              # 시간 손절: 5거래일
+    "min_rr": 2.0,               # 돌파·눌림 최소 손익비
+    "pullback_min_trend": 4,     # 눌림 최소 추세 조건 수(6개 중)
     "request_pause": 0.15,       # KRX 요청 간격(초)
 }
 
@@ -94,7 +97,7 @@ def get_universe(date: str) -> pd.DataFrame:
                 name = t
             rows.append({"ticker": t, "name": name, "universe": uni})
     if not rows:
-        sys.exit("구성종목 조회 실패. pykrx 업데이트(pip install -U pykrx) 후 다시 실행하세요.")
+        sys.exit("구성종목 조회 실패. KRX_ID·KRX_PW(KRX 데이터 사이트 계정) 설정과 pykrx 버전(pip install -U pykrx)을 확인하세요.")
     return pd.DataFrame(rows).drop_duplicates("ticker")
 
 
@@ -228,7 +231,8 @@ def analyze(df: pd.DataFrame) -> dict | None:
             near_pivot = abs(r.close / bp - 1) <= CFG["pullback_band"]
             near_ma20 = abs(r.close / r.ma20 - 1) <= CFG["pullback_band"]
             if ((near_pivot or near_ma20) and r.close >= bp * 0.97
-                    and r.volume < r.vol50_prev and r.close > r.ma50):
+                    and r.volume < r.vol50_prev and r.close > r.ma50
+                    and trend_n >= CFG["pullback_min_trend"]):
                 setup, ref = "눌림", bp
                 where = "피벗" if near_pivot else "20일선"
                 note = f"{hits.index[-1]:%m/%d} 돌파 후 {where} 눌림, 거래량 {vol_ratio:.1f}배"
@@ -250,6 +254,11 @@ def analyze(df: pd.DataFrame) -> dict | None:
         stop = np.nan
     target = entry * (1 + CFG["target_pct"])
     rr = (target - entry) / (entry - stop) if setup and entry > stop else np.nan
+
+    # 손익비 미달 돌파·눌림은 후보에서 제외
+    if setup in ("돌파", "눌림") and not (rr >= CFG["min_rr"]):
+        note = f"{setup} 조건 충족, 손익비 {rr:.1f}로 제외"
+        setup, stop, rr = None, np.nan, np.nan
 
     return {
         "close": r.close, "chg": (r.close / df["close"].iloc[-2] - 1) * 100,
@@ -361,9 +370,12 @@ def _table(df: pd.DataFrame, kind: str) -> str:
                "눌림": "최근 돌파 후 건강하게 눌린 종목이 없습니다.",
                "관찰": "돌파 임박 종목이 없습니다."}[kind]
         return f'<p class="empty">{msg}</p>'
-    entry_h = "돌파 시 진입" if kind == "관찰" else "진입(종가)"
+    watch = kind == "관찰"
+    entry_h = "돌파 시 진입" if watch else "진입(종가)"
+    stop_h = "돌파 후 손절" if watch else "손절"
+    tgt_h = "돌파 후 목표" if watch else "목표"
     head = (f'<tr><th class="l">종목</th><th>점수</th><th>종가</th><th>등락</th><th>RS</th>'
-            f'<th>추세</th><th>고점대비</th><th>{entry_h}</th><th>손절</th><th>목표</th>'
+            f'<th>추세</th><th>고점대비</th><th>{entry_h}</th><th>{stop_h}</th><th>{tgt_h}</th>'
             f'<th>손익비</th><th class="l">수급</th><th class="l">근거</th></tr>')
     body = []
     for _, r in df.iterrows():
@@ -378,7 +390,7 @@ def _table(df: pd.DataFrame, kind: str) -> str:
             f'<td title="{html.escape(r.trend_fail or "모두 충족")}">{r.trend_n}/6</td>'
             f"<td>{round(r.from_high) + 0:.0f}%</td>"
             f"<td>{_fmt(r.entry)}</td>"
-            f'<td class="neg">{_fmt(r.stop)}<br><small>{r.stop_pct:.1f}%</small></td>'
+            f'<td class="neg">{_fmt(r.stop)}<br><small>{"진입가 " if watch else ""}{r.stop_pct:.1f}%</small></td>'
             f'<td class="pos">{_fmt(r.target)}</td>'
             f'<td>{_fmt(r.rr, "{:.1f}")}</td>'
             f'<td class="note">{html.escape(r.flow_txt)}</td>'
@@ -396,8 +408,8 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
         for n, g in regimes.items())
     secs = [
         ("돌파", "오늘 20일 고점을 거래량과 함께 종가로 넘은 종목. 피벗 +5% 이내만 표시."),
-        ("눌림", "최근 10일 내 돌파한 뒤, 거래량이 줄며 피벗이나 20일선까지 되돌린 종목. 손익비가 가장 좋은 자리."),
-        ("관찰", "추세 조건 5개 이상 충족, 피벗 아래 5% 이내. 내일 돌파하면 진입 후보."),
+        ("눌림", "최근 10일 내 돌파한 뒤, 거래량이 줄며 피벗이나 20일선까지 되돌린 종목. 추세 조건 4개 이상만 표시."),
+        ("관찰", "추세 조건 5개 이상 충족, 피벗 아래 5% 이내. 아직 매수 자리가 아니며, 피벗을 거래량과 함께 넘을 때만 진입합니다. 손절·목표는 돌파가격 기준입니다."),
     ]
     body = "".join(
         f"<section><h2>{k} 후보</h2><p class=\"desc\">{t}</p>"
@@ -413,6 +425,7 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
 <div class="rules"><p>점수는 상대강도 35%, 추세 조건 30%, 거래량 15%, 외국인·기관 수급 20%로 계산합니다.
 RS는 분석 대상 안에서의 백분위(99가 최상)입니다. 추세 칸에 마우스를 올리면 미충족 조건이 보입니다.</p>
 <p>손절은 진입가 −7%와 피벗(또는 20일선) −3% 중 가까운 쪽이고, 목표는 +10%입니다.
+돌파·눌림은 손익비 {CFG['min_rr']:.0f} 이상인 종목만 표시합니다.
 {CFG['hold_days']}거래일 안에 목표에 닿지 않으면 정리하는 것을 원칙으로 합니다.
 시장 판정이 조정이면 후보가 있어도 비중을 크게 줄이세요.</p>
 <p>이 리포트는 공개 시세로 계산한 기계적 선별 결과이며, 투자 권유가 아닙니다. 실적, 공시, 뉴스는 따로 확인하세요.</p></div>
@@ -427,6 +440,10 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
             print("[주의] 16시 이전입니다. 당일 시세가 확정되지 않았을 수 있습니다.")
         elif now.hour < 18 and use_flow:
             print("[주의] 18시 이전입니다. 외국인·기관 수급은 잠정치로 반영됩니다.")
+    ok = bool(os.environ.get("KRX_ID")) and bool(os.environ.get("KRX_PW"))
+    print(f"KRX 계정 정보: {'확인됨' if ok else '없음'}")
+    if not ok:
+        sys.exit("KRX_ID·KRX_PW가 전달되지 않았습니다. GitHub Secrets 이름과 swing.yml의 env 설정을 확인하세요.")
     date = nearest_business_day(date)
     start = (dt.datetime.strptime(date, "%Y%m%d") - dt.timedelta(days=420)).strftime("%Y%m%d")
     print(f"기준일 {date} / 조회 시작 {start}")

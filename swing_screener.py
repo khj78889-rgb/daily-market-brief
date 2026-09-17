@@ -44,14 +44,25 @@ CFG = {
     "breakout_recent_days": 10,  # 눌림 대상: 최근 10거래일 내 돌파 이력
     "watch_band": 0.05,          # 돌파 임박: 피벗 아래 5% 이내
     "stop_pct": 0.07,            # 최대 손절 -7%
-    "target_pct": 0.10,          # 1차 목표 +10%
+    "target_pct": 0.10,          # 목표 상한 +10%
     "hold_days": 5,              # 시간 손절: 5거래일
-    "min_rr": 2.0,               # 돌파·눌림 최소 손익비
+    "min_rr": 2.0,               # 최소 손익비
+    "atr_period": 14,            # ATR 기간
+    "atr_stop_mult": 1.5,        # 손절: 진입가 − ATR×1.5 (노이즈 밖)
+    "atr_buffer": 0.5,           # 구조적 손절: 피벗·20일선 − ATR×0.5
+    "atr_target_mult": 3.0,      # 목표: 진입가 + ATR×3 (최대 +10%)
+    "account_size": 10_000_000,  # 수량 계산 기준 계좌(원). 공개 페이지에 표시되니 기준값 유지 권장
+    "risk_per_trade": 0.01,      # 1회 손절 시 계좌 손실 한도 1%
+    "max_position_pct": 0.25,    # 1종목 최대 비중 25%
+    "regime_mult": {"up": 1.0, "mid": 0.5, "down": 0.25, "unknown": 0.5},
+    "watch_trigger_days": 5,     # 관찰 후보 돌파 대기 기간(거래일)
+    "history_file": "history.csv",
     "pullback_min_trend": 4,     # 눌림 최소 추세 조건 수(6개 중)
     "request_pause": 0.15,       # KRX 요청 간격(초)
 }
 
 UNIVERSE = {"KOSPI200": "1028", "KOSDAQ150": "2203"}
+UNI_MARKET = {"KOSPI200": "코스피", "KOSDAQ150": "코스닥"}
 MARKET_INDEX = {"코스피": ("1001", "KS11"), "코스닥": ("2001", "KQ11")}
 COLS = {"시가": "open", "고가": "high", "저가": "low", "종가": "close",
         "거래량": "volume", "거래대금": "value", "등락률": "chg"}
@@ -167,6 +178,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for n in (5, 20, 50, 60, 120, 150, 200):
         df[f"ma{n}"] = df["close"].rolling(n).mean()
     df["vol50"] = df["volume"].rolling(50).mean()
+    prev = df["close"].shift(1)
+    tr = pd.concat([df["high"] - df["low"], (df["high"] - prev).abs(),
+                    (df["low"] - prev).abs()], axis=1).max(axis=1)
+    df["atr"] = tr.rolling(CFG["atr_period"]).mean()
     df["value20"] = df["value"].rolling(20).mean()
     df["high52"] = df["high"].rolling(252, min_periods=120).max()
     df["low52"] = df["low"].rolling(252, min_periods=120).min()
@@ -242,22 +257,29 @@ def analyze(df: pd.DataFrame) -> dict | None:
         setup = "관찰"
         note = f"피벗 {r.pivot:,.0f}까지 {abs(ext)*100:.1f}%"
 
+    atr = r.atr
+
+    def stop_for(entry_px, structural):
+        # 구조적 손절(피벗·20일선 − ATR×0.5)과 ATR 손절 중 넓은 쪽, 단 −7%보다 넓지 않게
+        wide = min(structural, entry_px - CFG["atr_stop_mult"] * atr)
+        return max(entry_px * (1 - CFG["stop_pct"]), wide)
+
     entry = r.close
     if setup == "돌파":
-        stop = max(entry * (1 - CFG["stop_pct"]), r.pivot * 0.97)
+        stop = stop_for(entry, r.pivot - CFG["atr_buffer"] * atr)
     elif setup == "눌림":
-        stop = max(entry * (1 - CFG["stop_pct"]), min(ref, r.ma20) * 0.97)
+        stop = stop_for(entry, min(ref, r.ma20) - CFG["atr_buffer"] * atr)
     elif setup == "관찰":
         entry = r.pivot * 1.001            # 돌파 시 진입가
-        stop = max(entry * (1 - CFG["stop_pct"]), r.pivot * 0.97)
+        stop = stop_for(entry, r.pivot - CFG["atr_buffer"] * atr)
     else:
         stop = np.nan
-    target = entry * (1 + CFG["target_pct"])
+    target = entry + min(CFG["atr_target_mult"] * atr, entry * CFG["target_pct"])
     rr = (target - entry) / (entry - stop) if setup and entry > stop else np.nan
 
-    # 손익비 미달 돌파·눌림은 후보에서 제외
-    if setup in ("돌파", "눌림") and not (rr >= CFG["min_rr"]):
-        note = f"{setup} 조건 충족, 손익비 {rr:.1f}로 제외"
+    # 손익비 미달 후보 제외
+    if setup and not (rr >= CFG["min_rr"] - 1e-6):
+        note = f"{setup} 조건 충족, 손익비 {rr:.2f}로 제외"
         setup, stop, rr = None, np.nan, np.nan
 
     return {
@@ -271,6 +293,8 @@ def analyze(df: pd.DataFrame) -> dict | None:
         "setup": setup, "note": note,
         "entry": entry, "stop": stop, "target": target, "rr": rr,
         "stop_pct": (stop / entry - 1) * 100 if setup else np.nan,
+        "target_pct": (target / entry - 1) * 100 if setup else np.nan,
+        "atr_pct": atr / r.close * 100,
     }
 
 
@@ -321,6 +345,126 @@ def composite(row: pd.Series) -> float:
                  + 0.15 * vol_part + 0.20 * row.flow_score, 1)
 
 
+
+def position_size(entry: float, stop: float, level: str) -> tuple[int, float]:
+    """1회 손절 시 계좌의 risk_per_trade만 잃도록 수량 계산, 시장 판정으로 축소."""
+    if not (entry > stop > 0):
+        return 0, 0.0
+    acct = CFG["account_size"]
+    risk_won = acct * CFG["risk_per_trade"] * CFG["regime_mult"].get(level, 0.5)
+    qty = int(risk_won // (entry - stop))
+    qty = min(qty, int(acct * CFG["max_position_pct"] // entry))
+    return qty, qty * entry
+
+
+# ─────────────────────────── 성과 기록 ───────────────────────────
+HIST_COLS = ["date", "ticker", "name", "universe", "setup", "entry", "stop", "target",
+             "status", "fill_date", "fill", "exit_date", "exit", "ret", "r_mult"]
+OPEN_STATUS = ("진행중", "대기")
+CLOSED_STATUS = ("목표", "손절", "시간청산")
+
+
+def evaluate_trade(row: pd.Series, bars: pd.DataFrame) -> dict:
+    """신호 다음 거래일부터 일봉으로 결과 판정. 같은 날 손절·목표가 모두 닿으면 손절로 봄."""
+    out = {"status": row.status, "fill_date": row.fill_date, "fill": row.fill,
+           "exit_date": "", "exit": np.nan, "ret": np.nan, "r_mult": np.nan}
+    sig = pd.Timestamp(str(row.date))
+    bars = bars[bars.index > sig]
+    entry, stop, target, hold = float(row.entry), float(row.stop), float(row.target), CFG["hold_days"]
+
+    start, fill, fill_date = 0, entry, ""
+    if row.setup == "관찰":
+        look = bars.iloc[:CFG["watch_trigger_days"]]
+        hit = look.index[look["high"] >= entry]
+        if len(hit) == 0:
+            out["status"] = "미발동" if len(bars) >= CFG["watch_trigger_days"] else "대기"
+            return out
+        d0 = hit[0]
+        start = bars.index.get_loc(d0)
+        fill = max(float(bars.at[d0, "open"]), entry)
+        fill_date = f"{d0:%Y%m%d}"
+    out["fill"], out["fill_date"] = fill, fill_date or row.fill_date
+
+    window = bars.iloc[start:start + hold]
+    risk = entry - stop
+    for i, (d, b) in enumerate(window.iterrows()):
+        first_watch_day = row.setup == "관찰" and i == 0
+        low_hit = (b.close <= stop) if first_watch_day else (b.low <= stop)
+        high_hit = (b.close >= target) if first_watch_day else (b.high >= target)
+        if low_hit:
+            px = stop if first_watch_day else min(float(b.open), stop)
+            status = "손절"
+        elif high_hit:
+            px = target if first_watch_day else max(float(b.open), target)
+            status = "목표"
+        else:
+            continue
+        out.update(status=status, exit_date=f"{d:%Y%m%d}", exit=px)
+        break
+    else:
+        if len(window) >= hold:
+            d = window.index[-1]
+            out.update(status="시간청산", exit_date=f"{d:%Y%m%d}", exit=float(window["close"].iloc[-1]))
+        else:
+            out["status"] = "진행중"
+            return out
+    out["ret"] = (out["exit"] / fill - 1) * 100
+    out["r_mult"] = (out["exit"] - fill) / risk if risk > 0 else np.nan
+    return out
+
+
+def update_history(path: Path, date: str, res: pd.DataFrame) -> pd.DataFrame:
+    if path.exists():
+        hist = pd.read_csv(path, dtype={"date": str, "ticker": str, "fill_date": str, "exit_date": str})
+    else:
+        hist = pd.DataFrame(columns=HIST_COLS)
+    hist = hist[hist["date"] != date]          # 같은 날 재실행 시 덮어쓰기
+
+    new = res[res["setup"].notna()].copy()
+    if len(new):
+        new = new.assign(date=date, status=np.where(new["setup"] == "관찰", "대기", "진행중"),
+                         fill_date=np.where(new["setup"] == "관찰", "", date),
+                         fill=np.where(new["setup"] == "관찰", np.nan, new["entry"]),
+                         exit_date="", exit=np.nan, ret=np.nan, r_mult=np.nan)
+        hist = pd.concat([hist, new[HIST_COLS]], ignore_index=True)
+
+    hist = hist.fillna({"fill_date": "", "exit_date": ""})
+    pending = hist.index[hist["status"].isin(OPEN_STATUS) & (hist["date"] < date)]
+    if len(pending):
+        print(f"성과 기록 {len(pending)}건 갱신 중...")
+    for i in pending:
+        row = hist.loc[i]
+        bars = get_ohlcv(row.ticker, row.date, date)
+        if bars is None or bars.empty:
+            continue
+        for k, v in evaluate_trade(row, bars).items():
+            hist.at[i, k] = v
+        time.sleep(CFG["request_pause"])
+
+    hist = hist.sort_values(["date", "setup", "ticker"]).reset_index(drop=True)
+    hist.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.2f")
+    return hist
+
+
+def history_summary(hist: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for setup in ("돌파", "눌림", "관찰", "전체"):
+        h = hist if setup == "전체" else hist[hist["setup"] == setup]
+        c = h[h["status"].isin(CLOSED_STATUS)]
+        ret = pd.to_numeric(c["ret"], errors="coerce")
+        rm = pd.to_numeric(c["r_mult"], errors="coerce")
+        rows.append({
+            "구분": setup, "신호": len(h), "확정": len(c),
+            "진행/대기": int(h["status"].isin(OPEN_STATUS).sum()),
+            "미발동": int((h["status"] == "미발동").sum()),
+            "승률": (ret > 0).mean() * 100 if len(c) else np.nan,
+            "평균수익": ret.mean() if len(c) else np.nan,
+            "평균R": rm.mean() if len(c) else np.nan,
+            "목표/손절/시간": f'{(c["status"]=="목표").sum()}/{(c["status"]=="손절").sum()}/{(c["status"]=="시간청산").sum()}',
+        })
+    return pd.DataFrame(rows)
+
+
 # ─────────────────────────── 리포트 ───────────────────────────
 CSS = """
 :root{--paper:#F2F4F6;--sheet:#FFFFFF;--ink:#17202A;--muted:#5A6572;--rule:#D6DCE3;
@@ -356,7 +500,37 @@ td.name b{display:block}td.name span{color:var(--muted);font-size:12px}
 .why{min-width:230px}
 .score{font-weight:700}
 .empty{padding:18px;color:var(--muted);background:var(--sheet);border:1px dashed var(--rule)}
+table.small{min-width:640px}
+h3{font-size:15px;margin:16px 0 6px}
+.hist + .desc{margin-top:10px}
 .rules{margin-top:34px;color:var(--muted);font-size:13px;max-width:78ch}
+
+.cards{display:none}
+@media (max-width:720px){
+ main{padding:20px 12px 48px}
+ .wrap{display:none}.cards{display:grid;gap:10px}
+ .wrap.hist{display:block}.opt{display:none}table.small{min-width:0}table.small th,table.small td{padding:7px 6px;font-size:13px}
+ .mkt .state{font-size:32px}
+ .card{background:var(--sheet);border:1px solid var(--rule);padding:14px}
+ .c-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+ .c-name{font-size:18px;display:block}
+ .c-code{color:var(--muted);font-size:12px}
+ .c-score{text-align:right;font-size:24px;font-weight:800;line-height:1}
+ .c-score span{display:block;font-size:11px;font-weight:500;color:var(--muted);margin-bottom:2px}
+ .c-price{font-size:15px;margin:6px 0 10px;font-weight:600}
+ dl{margin:0}dd{margin:0}
+ .c-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 0;
+  border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+ .c-meta dt,.c-plan dt{font-size:11px;color:var(--muted)}
+ .c-meta dd{font-weight:600}
+ .c-plan{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
+ .c-plan>div{background:var(--paper);padding:8px}
+ .c-plan dd{font-size:16px;font-weight:700}
+ .c-plan small{display:block;font-size:11px;font-weight:500}
+ .c-line{margin:4px 0 0;font-size:13px}
+ .c-line span{display:inline-block;min-width:34px;color:var(--muted)}
+ .c-miss{margin:6px 0 0;font-size:12px;color:var(--muted)}
+}
 """
 
 
@@ -376,7 +550,7 @@ def _table(df: pd.DataFrame, kind: str) -> str:
     tgt_h = "돌파 후 목표" if watch else "목표"
     head = (f'<tr><th class="l">종목</th><th>점수</th><th>종가</th><th>등락</th><th>RS</th>'
             f'<th>추세</th><th>고점대비</th><th>{entry_h}</th><th>{stop_h}</th><th>{tgt_h}</th>'
-            f'<th>손익비</th><th class="l">수급</th><th class="l">근거</th></tr>')
+            f'<th>손익비</th><th>ATR</th><th>수량</th><th class="l">수급</th><th class="l">근거</th></tr>')
     body = []
     for _, r in df.iterrows():
         cls = "pos" if r.chg > 0 else "neg" if r.chg < 0 else ""
@@ -393,13 +567,81 @@ def _table(df: pd.DataFrame, kind: str) -> str:
             f'<td class="neg">{_fmt(r.stop)}<br><small>{"진입가 " if watch else ""}{r.stop_pct:.1f}%</small></td>'
             f'<td class="pos">{_fmt(r.target)}</td>'
             f'<td>{_fmt(r.rr, "{:.1f}")}</td>'
+            f'<td>{r.atr_pct:.1f}%</td>'
+            f'<td>{int(r.qty):,}주<br><small>{r.amount/1e4:,.0f}만원</small></td>'
             f'<td class="note">{html.escape(r.flow_txt)}</td>'
             f'<td class="note why">{html.escape(r.note)}</td>'
             "</tr>")
-    return f'<div class="wrap"><table><thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>'
+    table = f'<div class="wrap"><table><thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>'
+
+    # 모바일용 카드
+    cards = []
+    for _, r in df.iterrows():
+        cls = "pos" if r.chg > 0 else "neg" if r.chg < 0 else ""
+        trend_tip = "" if not r.trend_fail else f'<p class="c-miss">미충족: {html.escape(r.trend_fail)}</p>'
+        cards.append(
+            '<article class="card">'
+            '<div class="c-top">'
+            f'<div><b class="c-name">{html.escape(str(r["name"]))}</b>'
+            f'<span class="c-code">{r.ticker} {r.universe}</span></div>'
+            f'<div class="c-score"><span>점수</span>{r.score:.0f}</div></div>'
+            f'<div class="c-price">{_fmt(r.close)}원 <span class="{cls}">{r.chg:+.2f}%</span></div>'
+            '<dl class="c-meta">'
+            f'<div><dt>RS</dt><dd>{r.rs_pct:.0f}</dd></div>'
+            f'<div><dt>추세</dt><dd>{r.trend_n}/6</dd></div>'
+            f'<div><dt>고점대비</dt><dd>{round(r.from_high) + 0:.0f}%</dd></div>'
+            f'<div><dt>손익비</dt><dd>{_fmt(r.rr, "{:.1f}")}</dd></div>'
+            f'<div><dt>ATR</dt><dd>{r.atr_pct:.1f}%</dd></div>'
+            '</dl>'
+            '<dl class="c-plan">'
+            f'<div><dt>{entry_h}</dt><dd>{_fmt(r.entry)}</dd></div>'
+            f'<div><dt>{stop_h}</dt><dd class="neg">{_fmt(r.stop)}<small>{r.stop_pct:.1f}%</small></dd></div>'
+            f'<div><dt>{tgt_h}</dt><dd class="pos">{_fmt(r.target)}<small>+{r.target_pct:.1f}%</small></dd></div>'
+            f'<div><dt>수량</dt><dd>{int(r.qty):,}주<small>{r.amount/1e4:,.0f}만원</small></dd></div>'
+            '</dl>'
+            f'<p class="c-line"><span>근거</span>{html.escape(r.note)}</p>'
+            f'<p class="c-line"><span>수급</span>{html.escape(r.flow_txt)}</p>'
+            f'{trend_tip}'
+            '</article>')
+    return table + f'<div class="cards">{"".join(cards)}</div>'
 
 
-def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: int) -> str:
+def _history_html(hist: pd.DataFrame | None) -> str:
+    head = ('<section><h2>성과 기록</h2><p class="desc">리포트에 나온 후보를 실제로 따라 샀다고 가정하고 '
+            f'{CFG["hold_days"]}거래일 동안 추적한 결과입니다. 관찰 후보는 {CFG["watch_trigger_days"]}거래일 안에 '
+            '돌파가 나왔을 때만 매수한 것으로 봅니다.</p>')
+    if hist is None or hist.empty:
+        return head + '<p class="empty">아직 기록이 없습니다. 오늘부터 쌓이기 시작합니다.</p></section>'
+    sm = history_summary(hist)
+    rows = "".join(
+        f'<tr><td class="l">{r["구분"]}</td><td>{r["신호"]}</td><td>{r["확정"]}</td>'
+        f'<td class="opt">{r["진행/대기"]}</td><td class="opt">{r["미발동"]}</td><td>{_fmt(r["승률"], "{:.0f}%")}</td>'
+        f'<td class="{"pos" if r["평균수익"] > 0 else "neg" if r["평균수익"] < 0 else ""}">{_fmt(r["평균수익"], "{:+.2f}%")}</td>'
+        f'<td>{_fmt(r["평균R"], "{:+.2f}")}</td><td class="opt">{r["목표/손절/시간"]}</td></tr>'
+        for _, r in sm.iterrows())
+    summary = ('<div class="wrap hist"><table class="small"><thead><tr><th class="l">구분</th><th>신호</th>'
+               '<th>확정</th><th class="opt">진행·대기</th><th class="opt">미발동</th><th>승률</th><th>평균 수익</th><th>평균 R</th>'
+               f'<th class="opt">목표/손절/시간</th></tr></thead><tbody>{rows}</tbody></table></div>')
+    closed = hist[hist["status"].isin(CLOSED_STATUS)].sort_values("exit_date", ascending=False).head(15)
+    if closed.empty:
+        recent = '<p class="empty">결과가 확정된 거래가 아직 없습니다. 신호 후 5거래일이 지나면 집계됩니다.</p>'
+    else:
+        items = "".join(
+            f'<tr><td class="l">{html.escape(str(r["name"]))}</td><td>{r.setup}</td>'
+            f'<td>{str(r.date)[4:6]}/{str(r.date)[6:]}</td><td>{r.status}</td>'
+            f'<td class="{"pos" if r.ret > 0 else "neg"}">{float(r.ret):+.2f}%</td>'
+            f'<td>{float(r.r_mult):+.2f}R</td></tr>'
+            for _, r in closed.iterrows())
+        recent = ('<h3>최근 확정 거래</h3><div class="wrap hist"><table class="small"><thead><tr>'
+                  '<th class="l">종목</th><th>유형</th><th>신호일</th><th>결과</th><th>수익률</th><th>R</th>'
+                  f'</tr></thead><tbody>{items}</tbody></table></div>')
+    note = ('<p class="desc">R은 처음 정한 손절 폭 대비 손익입니다(+2R = 손절 폭의 2배 수익). '
+            '표본이 30건 이상 쌓이기 전까지는 숫자를 과신하지 마세요.</p>')
+    return head + summary + recent + note + '</section>'
+
+
+def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: int,
+               hist: pd.DataFrame | None = None) -> str:
     d = dt.datetime.strptime(date, "%Y%m%d")
     mk = "".join(
         f'<div class="mkt {g["level"]}"><div class="name">{n}</div>'
@@ -422,10 +664,15 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
 <p class="sub">코스피200과 코스닥150 {n_total}종목 중 거래대금 조건을 넘은 {n_ok}종목을 분석했습니다. 보유 기간은 최대 {CFG['hold_days']}거래일 기준입니다.</p>
 <div class="regime">{mk}</div>
 {body}
+{_history_html(hist)}
 <div class="rules"><p>점수는 상대강도 35%, 추세 조건 30%, 거래량 15%, 외국인·기관 수급 20%로 계산합니다.
-RS는 분석 대상 안에서의 백분위(99가 최상)입니다. 추세 칸에 마우스를 올리면 미충족 조건이 보입니다.</p>
-<p>손절은 진입가 −7%와 피벗(또는 20일선) −3% 중 가까운 쪽이고, 목표는 +10%입니다.
-돌파·눌림은 손익비 {CFG['min_rr']:.0f} 이상인 종목만 표시합니다.
+RS는 분석 대상 안에서의 백분위(99가 최상)입니다. PC에서는 추세 칸에 마우스를 올리면, 휴대폰에서는 카드 아래에 미충족 조건이 보입니다.</p>
+<p>ATR은 최근 {CFG['atr_period']}일 평균 하루 변동폭입니다. 손절은 피벗(또는 20일선) − ATR×{CFG['atr_buffer']}와 진입가 − ATR×{CFG['atr_stop_mult']} 중 넓은 쪽이며, 진입가 −7%보다 넓게 잡지 않습니다.
+그래서 피벗에서 멀리 올라간 종목이나 하루 변동폭이 4.7%를 넘는 종목은 손익비가 모자라 자동으로 빠집니다.
+목표는 진입가 + ATR×{CFG['atr_target_mult']:.0f}(최대 +10%)이고, 손익비 {CFG['min_rr']:.0f} 이상인 종목만 표시합니다.</p>
+<p>수량은 계좌 {CFG['account_size']/1e4:,.0f}만원 기준으로, 손절 시 계좌의 {CFG['risk_per_trade']*100:.0f}%만 잃도록 계산하고 시장 판정에 따라 줄입니다(상승 추세 100%, 상승 압박 50%, 조정 25%). 1종목 최대 비중은 {CFG['max_position_pct']*100:.0f}%입니다.
+계좌가 3,000만원이면 수량을 3배로 보시면 됩니다.</p>
+<p>
 {CFG['hold_days']}거래일 안에 목표에 닿지 않으면 정리하는 것을 원칙으로 합니다.
 시장 판정이 조정이면 후보가 있어도 비중을 크게 줄이세요.</p>
 <p>이 리포트는 공개 시세로 계산한 기계적 선별 결과이며, 투자 권유가 아닙니다. 실적, 공시, 뉴스는 따로 확인하세요.</p></div>
@@ -478,17 +725,30 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
 
     res["score"] = res.apply(composite, axis=1)
 
+    levels = res["universe"].map(lambda u: regimes.get(UNI_MARKET.get(u, ""), {}).get("level", "unknown"))
+    sized = [position_size(e, st, lv) for e, st, lv in zip(res["entry"], res["stop"], levels)]
+    res["qty"] = [q for q, _ in sized]
+    res["amount"] = [a for _, a in sized]
+
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"swing_{date}.csv"
     html_path = out_dir / f"swing_{date}.html"
     res.sort_values("score", ascending=False).drop(columns=["rs_raw"]).to_csv(
         csv_path, index=False, encoding="utf-8-sig", float_format="%.2f")
-    html_path.write_text(build_html(date, regimes, res, len(uni), len(res)), encoding="utf-8")
+    try:
+        hist = update_history(out_dir / CFG["history_file"], date, res)
+    except Exception as e:  # 기록 실패가 리포트 생성을 막지 않도록
+        print(f"[경고] 성과 기록 갱신 실패: {e}")
+        hist = None
+    html_path.write_text(build_html(date, regimes, res, len(uni), len(res), hist), encoding="utf-8")
 
     for k in ("돌파", "눌림", "관찰"):
         sub = res[res.setup == k].sort_values("score", ascending=False).head(5)
         names = ", ".join(f"{r['name']}({r.score:.0f})" for _, r in sub.iterrows()) or "없음"
         print(f"{k}: {names}")
+    if hist is not None and len(hist):
+        t = history_summary(hist).iloc[-1]
+        print(f"성과 기록: 신호 {t['신호']}건, 확정 {t['확정']}건, 승률 {_fmt(t['승률'], '{:.0f}%')}, 평균 R {_fmt(t['평균R'], '{:+.2f}')}")
     print(f"리포트: {html_path}\nCSV: {csv_path}")
     return html_path
 

@@ -57,6 +57,11 @@ CFG = {
     "regime_mult": {"up": 1.0, "mid": 0.5, "down": 0.25, "unknown": 0.5},
     "watch_trigger_days": 5,     # 관찰 후보 돌파 대기 기간(거래일)
     "history_file": "history.csv",
+    "etf_top_n": 30,             # 거래대금 상위 ETF 수 (0이면 ETF 분석 생략)
+    "etf_value_days": 5,         # 거래대금 순위: 최근 5거래일 평균
+    # 추세 매매에 맞지 않는 ETF 제외(이름에 포함되면 제외). 레버리지를 보고 싶으면 목록에서 지우세요.
+    "etf_exclude": ["레버리지", "인버스", "2X", "CD금리", "KOFR", "머니마켓", "단기채", "단기통안",
+                    "초단기", "국고채", "채권", "금리", "SOFR", "MMF"],
     "pullback_min_trend": 4,     # 눌림 최소 추세 조건 수(6개 중)
     "request_pause": 0.15,       # KRX 요청 간격(초)
 }
@@ -130,6 +135,12 @@ def get_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame | None:
             return _normalize(df)
     except Exception:
         pass
+    try:  # ETF
+        df = stock.get_etf_ohlcv_by_date(start, end, ticker)
+        if df is not None and len(df):
+            return _normalize(df)
+    except Exception:
+        pass
     try:  # 대체 경로
         import FinanceDataReader as fdr
         df = fdr.DataReader(ticker, start, end)
@@ -138,6 +149,37 @@ def get_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame | None:
     except Exception:
         pass
     return None
+
+
+def get_etf_universe(dates: list[str]) -> pd.DataFrame:
+    """최근 거래일 평균 거래대금 상위 ETF (현금성·레버리지·인버스 제외)."""
+    stock = _pykrx()
+    vals = []
+    for d in dates[-CFG["etf_value_days"]:]:
+        try:
+            df = stock.get_etf_ohlcv_by_ticker(d)
+            if df is not None and len(df) and "거래대금" in df.columns:
+                vals.append(df["거래대금"].astype(float).rename(d))
+        except Exception:
+            pass
+        time.sleep(CFG["request_pause"])
+    if not vals:
+        print("[경고] ETF 목록을 받지 못했습니다.")
+        return pd.DataFrame(columns=["ticker", "name", "universe"])
+    avg = pd.concat(vals, axis=1).mean(axis=1).sort_values(ascending=False)
+    rows = []
+    for t in avg.index:
+        try:
+            name = stock.get_etf_ticker_name(t)
+        except Exception:
+            name = t
+        name = str(name)
+        if any(k.lower() in name.lower() for k in CFG["etf_exclude"]):
+            continue
+        rows.append({"ticker": t, "name": name, "universe": "ETF", "etf_value_eok": avg[t] / 1e8})
+        if len(rows) >= CFG["etf_top_n"]:
+            break
+    return pd.DataFrame(rows)
 
 
 def get_index(name: str, start: str, end: str) -> pd.DataFrame | None:
@@ -381,6 +423,9 @@ def evaluate_trade(row: pd.Series, bars: pd.DataFrame) -> dict:
             return out
         d0 = hit[0]
         start = bars.index.get_loc(d0)
+        if float(bars.at[d0, "open"]) > entry * (1 + CFG["max_extension"]):
+            out.update(status="미발동", fill_date=f"{d0:%Y%m%d}")   # 과도한 갭상승은 추격 안 함
+            return out
         fill = max(float(bars.at[d0, "open"]), entry)
         fill_date = f"{d0:%Y%m%d}"
     out["fill"], out["fill_date"] = fill, fill_date or row.fill_date
@@ -502,6 +547,8 @@ td.name b{display:block}td.name span{color:var(--muted);font-size:12px}
 .empty{padding:18px;color:var(--muted);background:var(--sheet);border:1px dashed var(--rule)}
 table.small{min-width:640px}
 h3{font-size:15px;margin:16px 0 6px}
+table.etf td.l{white-space:normal;min-width:130px}
+.stamp{margin:-14px 0 18px;font-size:13px;color:var(--muted)}
 .hist + .desc{margin-top:10px}
 .rules{margin-top:34px;color:var(--muted);font-size:13px;max-width:78ch}
 
@@ -640,9 +687,43 @@ def _history_html(hist: pd.DataFrame | None) -> str:
     return head + summary + recent + note + '</section>'
 
 
+def _etf_html(etf: pd.DataFrame) -> str:
+    if etf.empty:
+        return ""
+    head = ('<section><h2>ETF</h2><p class="desc">최근 5거래일 평균 거래대금 상위 ETF입니다. '
+            '레버리지·인버스와 채권·금리형은 뺐습니다. RS는 주식 전체와 비교한 백분위라 '
+            '어느 업종·자산이 시장보다 강한지 보는 데 쓰세요. ETF는 외국인·기관 수급을 반영하지 않습니다.</p>')
+    parts = []
+    for k in ("돌파", "눌림", "관찰"):
+        sub = etf[etf.setup == k].sort_values("score", ascending=False)
+        if len(sub):
+            parts.append(f"<h3>{k}</h3>{_table(sub, k)}")
+    if not parts:
+        parts.append('<p class="empty">오늘 조건을 충족한 ETF가 없습니다.</p>')
+    ov = etf.sort_values("rs_pct", ascending=False)
+    rows = "".join(
+        f'<tr><td class="l">{html.escape(str(r["name"]))}</td>'
+        f'<td class="{"pos" if r.chg > 0 else "neg" if r.chg < 0 else ""}">{r.chg:+.2f}%</td>'
+        f'<td>{r.rs_pct:.0f}</td><td>{r.trend_n}/6</td><td>{round(r.from_high) + 0:.0f}%</td>'
+        f'<td>{r.setup if isinstance(r.setup, str) else "-"}</td></tr>'
+        for _, r in ov.iterrows())
+    overview = ('<h3>상대강도 순위</h3><div class="wrap hist"><table class="small etf"><thead><tr>'
+                '<th class="l">ETF</th><th>등락</th><th>RS</th><th>추세</th><th>고점대비</th><th>신호</th>'
+                f'</tr></thead><tbody>{rows}</tbody></table></div>')
+    return head + "".join(parts) + overview + "</section>"
+
+
 def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: int,
                hist: pd.DataFrame | None = None) -> str:
     d = dt.datetime.strptime(date, "%Y%m%d")
+    now = dt.datetime.now()
+    if now.strftime("%Y%m%d") != date or now.hour >= 18:
+        state = "시세·수급 확정치"
+    elif now.hour >= 16:
+        state = "시세 확정, 수급 잠정치"
+    else:
+        state = "장중 데이터(미확정)"
+    stamp = f"생성 {now:%Y-%m-%d %H:%M} · {state}"
     mk = "".join(
         f'<div class="mkt {g["level"]}"><div class="name">{n}</div>'
         f'<div class="state">{g["label"]}</div>'
@@ -653,15 +734,20 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
         ("눌림", "최근 10일 내 돌파한 뒤, 거래량이 줄며 피벗이나 20일선까지 되돌린 종목. 추세 조건 4개 이상만 표시."),
         ("관찰", "추세 조건 5개 이상 충족, 피벗 아래 5% 이내. 아직 매수 자리가 아니며, 피벗을 거래량과 함께 넘을 때만 진입합니다. 손절·목표는 돌파가격 기준입니다."),
     ]
+    stocks = res[res.universe != "ETF"]
+    n_etf = int((res.universe == "ETF").sum())
+    etf_txt = f", 거래대금 상위 ETF {n_etf}종목" if n_etf else ""
     body = "".join(
         f"<section><h2>{k} 후보</h2><p class=\"desc\">{t}</p>"
-        f"{_table(res[res.setup == k].sort_values('score', ascending=False).head(15), k)}</section>"
+        f"{_table(stocks[stocks.setup == k].sort_values('score', ascending=False).head(15), k)}</section>"
         for k, t in secs)
+    body += _etf_html(res[res.universe == "ETF"])
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스윙 후보 {d:%Y-%m-%d}</title><style>{CSS}</style></head><body><main>
 <h1>스윙 후보 {d:%Y년 %m월 %d일}</h1>
-<p class="sub">코스피200과 코스닥150 {n_total}종목 중 거래대금 조건을 넘은 {n_ok}종목을 분석했습니다. 보유 기간은 최대 {CFG['hold_days']}거래일 기준입니다.</p>
+<p class="sub">코스피200과 코스닥150 {n_total}종목 중 거래대금 조건을 넘은 {n_ok}종목{etf_txt}을 분석했습니다. 보유 기간은 최대 {CFG['hold_days']}거래일 기준입니다.</p>
+<p class="stamp">{stamp}</p>
 <div class="regime">{mk}</div>
 {body}
 {_history_html(hist)}
@@ -695,7 +781,8 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
     start = (dt.datetime.strptime(date, "%Y%m%d") - dt.timedelta(days=420)).strftime("%Y%m%d")
     print(f"기준일 {date} / 조회 시작 {start}")
 
-    regimes = {n: market_regime(get_index(n, start, date)) for n in MARKET_INDEX}
+    idx_data = {n: get_index(n, start, date) for n in MARKET_INDEX}
+    regimes = {n: market_regime(df) for n, df in idx_data.items()}
     for n, g in regimes.items():
         print(f"  {n}: {g['label']}  ({g['detail']})")
 
@@ -714,8 +801,8 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
     if res.empty:
         sys.exit("분석 가능한 종목이 없습니다. 데이터 조회 상태를 확인하세요.")
     res["rs_pct"] = res["rs_raw"].rank(pct=True).fillna(0.5) * 99
-
     res["flow_score"], res["flow_txt"] = 50.0, "-"
+
     if use_flow:
         fstart = (dt.datetime.strptime(date, "%Y%m%d") - dt.timedelta(days=14)).strftime("%Y%m%d")
         for idx in res.index[res["setup"].notna()]:
@@ -723,9 +810,30 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
             res.at[idx, "flow_score"], res.at[idx, "flow_txt"] = s, t
             time.sleep(CFG["request_pause"])
 
+    # ETF: 거래대금 상위 N개, RS는 주식 분포 기준 백분위
+    kospi = idx_data.get("코스피")
+    if CFG["etf_top_n"] and kospi is not None and len(kospi):
+        trade_dates = [f"{d:%Y%m%d}" for d in kospi.index]
+        etfs = get_etf_universe(trade_dates)
+        print(f"ETF {len(etfs)}종목 분석 중...")
+        erows = []
+        for u in etfs.itertuples():
+            a = analyze(get_ohlcv(u.ticker, start, date))
+            if a:
+                erows.append({"ticker": u.ticker, "name": u.name, "universe": "ETF", **a})
+            time.sleep(CFG["request_pause"])
+        if erows:
+            er = pd.DataFrame(erows)
+            base = np.sort(res["rs_raw"].dropna().values)
+            er["rs_pct"] = [np.searchsorted(base, v) / max(len(base), 1) * 99 if not np.isnan(v) else 49.5
+                            for v in er["rs_raw"]]
+            er["flow_score"], er["flow_txt"] = 50.0, "ETF 수급 미반영"
+            res = pd.concat([res, er], ignore_index=True)
+
+
     res["score"] = res.apply(composite, axis=1)
 
-    levels = res["universe"].map(lambda u: regimes.get(UNI_MARKET.get(u, ""), {}).get("level", "unknown"))
+    levels = res["universe"].map(lambda u: regimes.get(UNI_MARKET.get(u, "코스피"), {}).get("level", "unknown"))
     sized = [position_size(e, st, lv) for e, st, lv in zip(res["entry"], res["stop"], levels)]
     res["qty"] = [q for q, _ in sized]
     res["amount"] = [a for _, a in sized]
@@ -740,10 +848,10 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
     except Exception as e:  # 기록 실패가 리포트 생성을 막지 않도록
         print(f"[경고] 성과 기록 갱신 실패: {e}")
         hist = None
-    html_path.write_text(build_html(date, regimes, res, len(uni), len(res), hist), encoding="utf-8")
+    html_path.write_text(build_html(date, regimes, res, len(uni), int((res.universe != "ETF").sum()), hist), encoding="utf-8")
 
     for k in ("돌파", "눌림", "관찰"):
-        sub = res[res.setup == k].sort_values("score", ascending=False).head(5)
+        sub = res[(res.setup == k) & (res.universe != "ETF")].sort_values("score", ascending=False).head(5)
         names = ", ".join(f"{r['name']}({r.score:.0f})" for _, r in sub.iterrows()) or "없음"
         print(f"{k}: {names}")
     if hist is not None and len(hist):

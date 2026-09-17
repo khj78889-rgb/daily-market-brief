@@ -8,15 +8,20 @@ on:
 permissions:
   contents: write
 
+concurrency:                  # 수동·자동 실행이 겹쳐도 하나씩 순서대로
+  group: swing-screener
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       TZ: Asia/Seoul
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -31,7 +36,7 @@ jobs:
 
       - name: 최신 리포트를 index.html로 복사
         run: |
-          latest=$(ls -t swing/swing_*.html | head -1)
+          latest=$(ls swing/swing_*.html | sort | tail -1)
           cp "$latest" swing/index.html
 
       - name: 결과 저장
@@ -39,5 +44,6 @@ jobs:
           git config user.name "swing-bot"
           git config user.email "swing-bot@users.noreply.github.com"
           git add swing
-          git commit -m "스윙 리포트 $(date +%Y-%m-%d)" || echo "변경 없음"
+          git commit -m "스윙 리포트 $(date +%Y-%m-%d)" || { echo "변경 없음"; exit 0; }
+          git pull --rebase --autostash
           git push

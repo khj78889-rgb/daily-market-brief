@@ -24,7 +24,10 @@ jobs:
         run: pip install pykrx pandas
 
       - name: 스크리너 실행
-        run: python swing_screener.py --out swing
+        env:
+          KRX_ID: ${{ secrets.KRX_ID }}
+          KRX_PW: ${{ secrets.KRX_PW }}
+        run: python -u swing_screener.py --out swing
 
       - name: 최신 리포트를 index.html로 복사
         run: |

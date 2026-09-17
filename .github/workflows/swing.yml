@@ -1,0 +1,40 @@
+name: swing-screener
+
+on:
+  schedule:
+    - cron: "30 9 * * 1-5"   # 한국시간 평일 18:30 (UTC 09:30)
+  workflow_dispatch:          # 휴대폰에서 수동 실행 버튼
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 도구 설치
+        run: pip install pykrx pandas
+
+      - name: 스크리너 실행
+        run: python swing_screener.py --out swing
+
+      - name: 최신 리포트를 index.html로 복사
+        run: |
+          latest=$(ls -t swing/swing_*.html | head -1)
+          cp "$latest" swing/index.html
+
+      - name: 결과 저장
+        run: |
+          git config user.name "swing-bot"
+          git config user.email "swing-bot@users.noreply.github.com"
+          git add swing
+          git commit -m "스윙 리포트 $(date +%Y-%m-%d)" || echo "변경 없음"
+          git push

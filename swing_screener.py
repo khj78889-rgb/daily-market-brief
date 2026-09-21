@@ -44,13 +44,13 @@ CFG = {
     "breakout_recent_days": 10,  # 눌림 대상: 최근 10거래일 내 돌파 이력
     "watch_band": 0.05,          # 돌파 임박: 피벗 아래 5% 이내
     "stop_pct": 0.07,            # 최대 손절 -7%
-    "target_pct": 0.10,          # 목표 상한 +10%
+    "target_pct": 0.14,          # 목표 상한 +14% (= 최대 손절 7% × 손익비 2)
     "hold_days": 5,              # 시간 손절: 5거래일
     "min_rr": 2.0,               # 최소 손익비
     "atr_period": 14,            # ATR 기간
     "atr_stop_mult": 1.5,        # 손절: 진입가 − ATR×1.5 (노이즈 밖)
     "atr_buffer": 0.5,           # 구조적 손절: 피벗·20일선 − ATR×0.5
-    "atr_target_mult": 3.0,      # 목표: 진입가 + ATR×3 (최대 +10%)
+    "atr_target_mult": 3.0,      # 목표: 진입가 + ATR×3 (최대 target_pct)
     "account_size": 10_000_000,  # 수량 계산 기준 계좌(원). 공개 페이지에 표시되니 기준값 유지 권장
     "risk_per_trade": 0.01,      # 1회 손절 시 계좌 손실 한도 1%
     "max_position_pct": 0.25,    # 1종목 최대 비중 25%
@@ -319,6 +319,12 @@ def analyze(df: pd.DataFrame) -> dict | None:
     target = entry + min(CFG["atr_target_mult"] * atr, entry * CFG["target_pct"])
     rr = (target - entry) / (entry - stop) if setup and entry > stop else np.nan
 
+    # 변동성 과대: ATR×1.5가 최대 손절(7%)보다 크면 손절이 일상 흔들림 안에 들어감
+    max_atr = CFG["stop_pct"] / CFG["atr_stop_mult"]
+    if setup and atr / entry > max_atr + 1e-9:
+        note = f"{setup} 조건 충족, 변동성 과대(ATR {atr / r.close * 100:.1f}%)로 제외"
+        setup, stop, rr = None, np.nan, np.nan
+
     # 손익비 미달 후보 제외
     if setup and not (rr >= CFG["min_rr"] - 1e-6):
         note = f"{setup} 조건 충족, 손익비 {rr:.2f}로 제외"
@@ -411,37 +417,35 @@ def evaluate_trade(row: pd.Series, bars: pd.DataFrame) -> dict:
     out = {"status": row.status, "fill_date": row.fill_date, "fill": row.fill,
            "exit_date": "", "exit": np.nan, "ret": np.nan, "r_mult": np.nan}
     sig = pd.Timestamp(str(row.date))
+    bars = bars.copy()
+    bars["vol50_prev"] = bars["volume"].shift(1).rolling(50, min_periods=20).mean()
     bars = bars[bars.index > sig]
     entry, stop, target, hold = float(row.entry), float(row.stop), float(row.target), CFG["hold_days"]
 
     start, fill, fill_date = 0, entry, ""
     if row.setup == "관찰":
+        # 실전 규칙과 동일: 종가가 진입가 이상(단, +5% 초과 과열은 제외) + 거래량 1.5배 → 그날 종가 체결
         look = bars.iloc[:CFG["watch_trigger_days"]]
-        hit = look.index[look["high"] >= entry]
+        ok = ((look["close"] >= entry) & (look["close"] <= entry * (1 + CFG["max_extension"]))
+              & (look["volume"] >= CFG["vol_mult"] * look["vol50_prev"]))
+        hit = look.index[ok.fillna(False)]
         if len(hit) == 0:
-            out["status"] = "미발동" if len(bars) >= CFG["watch_trigger_days"] else "대기"
+            out.update(status="미발동" if len(bars) >= CFG["watch_trigger_days"] else "대기",
+                       fill_date="", fill=np.nan)
             return out
         d0 = hit[0]
-        start = bars.index.get_loc(d0)
-        if float(bars.at[d0, "open"]) > entry * (1 + CFG["max_extension"]):
-            out.update(status="미발동", fill_date=f"{d0:%Y%m%d}")   # 과도한 갭상승은 추격 안 함
-            return out
-        fill = max(float(bars.at[d0, "open"]), entry)
+        start = bars.index.get_loc(d0) + 1          # 체결 다음 날부터 추적
+        fill = float(bars.at[d0, "close"])
         fill_date = f"{d0:%Y%m%d}"
     out["fill"], out["fill_date"] = fill, fill_date or row.fill_date
 
     window = bars.iloc[start:start + hold]
-    risk = entry - stop
-    for i, (d, b) in enumerate(window.iterrows()):
-        first_watch_day = row.setup == "관찰" and i == 0
-        low_hit = (b.close <= stop) if first_watch_day else (b.low <= stop)
-        high_hit = (b.close >= target) if first_watch_day else (b.high >= target)
-        if low_hit:
-            px = stop if first_watch_day else min(float(b.open), stop)
-            status = "손절"
-        elif high_hit:
-            px = target if first_watch_day else max(float(b.open), target)
-            status = "목표"
+    risk = fill - stop
+    for d, b in window.iterrows():
+        if b.low <= stop:
+            px, status = min(float(b.open), stop), "손절"
+        elif b.high >= target:
+            px, status = max(float(b.open), target), "목표"
         else:
             continue
         out.update(status=status, exit_date=f"{d:%Y%m%d}", exit=px)
@@ -479,7 +483,8 @@ def update_history(path: Path, date: str, res: pd.DataFrame) -> pd.DataFrame:
         print(f"성과 기록 {len(pending)}건 갱신 중...")
     for i in pending:
         row = hist.loc[i]
-        bars = get_ohlcv(row.ticker, row.date, date)
+        pre = (pd.Timestamp(str(row.date)) - pd.Timedelta(days=110)).strftime("%Y%m%d")
+        bars = get_ohlcv(row.ticker, pre, date)          # 거래량 평균 계산용으로 앞 기간 포함
         if bars is None or bars.empty:
             continue
         for k, v in evaluate_trade(row, bars).items():
@@ -656,7 +661,7 @@ def _table(df: pd.DataFrame, kind: str) -> str:
 def _history_html(hist: pd.DataFrame | None) -> str:
     head = ('<section><h2>성과 기록</h2><p class="desc">리포트에 나온 후보를 실제로 따라 샀다고 가정하고 '
             f'{CFG["hold_days"]}거래일 동안 추적한 결과입니다. 관찰 후보는 {CFG["watch_trigger_days"]}거래일 안에 '
-            '돌파가 나왔을 때만 매수한 것으로 봅니다.</p>')
+            '종가가 돌파가 이상(+5% 이내)이고 거래량이 평소의 1.5배 이상인 날, 그날 종가로 매수한 것으로 봅니다.</p>')
     if hist is None or hist.empty:
         return head + '<p class="empty">아직 기록이 없습니다. 오늘부터 쌓이기 시작합니다.</p></section>'
     sm = history_summary(hist)
@@ -754,8 +759,8 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
 <div class="rules"><p>점수는 상대강도 35%, 추세 조건 30%, 거래량 15%, 외국인·기관 수급 20%로 계산합니다.
 RS는 분석 대상 안에서의 백분위(99가 최상)입니다. PC에서는 추세 칸에 마우스를 올리면, 휴대폰에서는 카드 아래에 미충족 조건이 보입니다.</p>
 <p>ATR은 최근 {CFG['atr_period']}일 평균 하루 변동폭입니다. 손절은 피벗(또는 20일선) − ATR×{CFG['atr_buffer']}와 진입가 − ATR×{CFG['atr_stop_mult']} 중 넓은 쪽이며, 진입가 −7%보다 넓게 잡지 않습니다.
-그래서 피벗에서 멀리 올라간 종목이나 하루 변동폭이 4.7%를 넘는 종목은 손익비가 모자라 자동으로 빠집니다.
-목표는 진입가 + ATR×{CFG['atr_target_mult']:.0f}(최대 +10%)이고, 손익비 {CFG['min_rr']:.0f} 이상인 종목만 표시합니다.</p>
+하루 변동폭(ATR)이 4.7%를 넘으면 손절이 일상적인 흔들림 안에 들어가므로 제외하고, 피벗에서 멀리 올라간 종목은 손익비가 모자라 빠집니다.
+목표는 진입가 + ATR×{CFG['atr_target_mult']:.0f}(최대 +{CFG['target_pct']*100:.0f}%)이고, 손익비 {CFG['min_rr']:.0f} 이상인 종목만 표시합니다.</p>
 <p>수량은 계좌 {CFG['account_size']/1e4:,.0f}만원 기준으로, 손절 시 계좌의 {CFG['risk_per_trade']*100:.0f}%만 잃도록 계산하고 시장 판정에 따라 줄입니다(상승 추세 100%, 상승 압박 50%, 조정 25%). 1종목 최대 비중은 {CFG['max_position_pct']*100:.0f}%입니다.
 계좌가 3,000만원이면 수량을 3배로 보시면 됩니다.</p>
 <p>

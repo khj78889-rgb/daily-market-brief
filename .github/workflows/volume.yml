@@ -1,0 +1,67 @@
+name: volume-surge
+
+on:
+  workflow_dispatch:          # 휴대폰에서 버튼으로 실행 (조건 입력 가능)
+    inputs:
+      universe:
+        description: "대상 (index = 코스피200·코스닥150, all = 전 종목)"
+        type: choice
+        options: ["index", "all"]
+        default: "index"
+      ratio:
+        description: "전일 대비 거래량 배수"
+        default: "3"
+      date:
+        description: "기준일 YYYYMMDD (비우면 직전 거래일)"
+        default: ""
+  schedule:
+    - cron: "35 9 * * 1-5"    # 한국시간 평일 18:35
+
+permissions:
+  contents: write
+
+concurrency:
+  group: volume-surge
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 도구 설치
+        run: pip install pykrx pandas
+
+      - name: 스캐너 실행
+        env:
+          KRX_ID: ${{ secrets.KRX_ID }}
+          KRX_PW: ${{ secrets.KRX_PW }}
+          UNIVERSE: ${{ inputs.universe || 'index' }}
+          RATIO: ${{ inputs.ratio || '3' }}
+          DATE: ${{ inputs.date }}
+        run: |
+          ARGS="--out swing/volume --universe $UNIVERSE --ratio $RATIO"
+          if [ -n "$DATE" ]; then ARGS="$ARGS --date $DATE"; fi
+          python -u volume_surge.py $ARGS
+
+      - name: 최신 결과를 index.html로 복사
+        run: |
+          latest=$(ls swing/volume/volume_surge*.html | sort | tail -1)
+          cp "$latest" swing/volume/index.html
+
+      - name: 결과 저장
+        run: |
+          git config user.name "swing-bot"
+          git config user.email "swing-bot@users.noreply.github.com"
+          git add swing/volume
+          git commit -m "거래량 급증 $(date +%Y-%m-%d)" || { echo "변경 없음"; exit 0; }
+          git pull --rebase --autostash
+          git push

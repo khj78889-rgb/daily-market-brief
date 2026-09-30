@@ -52,11 +52,6 @@ jobs:
           if [ -n "$DATE" ]; then ARGS="$ARGS --date $DATE"; fi
           python -u volume_surge.py $ARGS
 
-      - name: 최신 결과를 index.html로 복사
-        run: |
-          latest=$(ls swing/volume/volume_surge*.html | sort | tail -1)
-          cp "$latest" swing/volume/index.html
-
       - name: 결과 저장
         run: |
           git config user.name "swing-bot"

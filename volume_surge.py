@@ -164,6 +164,7 @@ def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: s
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>거래량 급증 {d:%Y-%m-%d}</title><style>{CSS}</style></head><body><main>
 <h1>거래량 급증 {d:%Y년 %m월 %d일}</h1>
+<p class="sub">생성 {dt.datetime.now():%Y-%m-%d %H:%M} · {"장중 데이터(미확정)" if dt.datetime.now().strftime("%Y%m%d") == date and dt.datetime.now().hour < 16 else "마감 확정"}</p>
 <p class="sub">직전 거래일({prev[:4]}-{prev[4:6]}-{prev[6:]}) 대비 거래량 {ratio:.0f}배 이상, 거래대금 {CFG['min_value_eok']}억원 이상인 종목 {len(df)}개입니다.
 {"코스피200·코스닥150 구성종목" if universe == "index" else "코스피·코스닥 보통주"} 기준이며 ETF는 제외됩니다.</p>
 <div class="wrap"><table><thead><tr><th class="l">종목</th><th>배수</th><th>종가</th><th>등락</th>
@@ -198,7 +199,9 @@ def main():
     html_path = out / f"volume_surge{tag}_{date}.html"
     df.reset_index().rename(columns={"index": "ticker", "티커": "ticker"}).to_csv(
         csv_path, index=False, encoding="utf-8-sig", float_format="%.2f")
-    html_path.write_text(build_html(df, date, prev, a.ratio, a.universe), encoding="utf-8")
+    page = build_html(df, date, prev, a.ratio, a.universe)
+    html_path.write_text(page, encoding="utf-8")
+    (out / "index.html").write_text(page, encoding="utf-8")   # 항상 최신 결과로 덮어씀
 
     print(f"{a.ratio:.0f}배 이상: {len(df)}종목")
     for i, r in df.head(15).iterrows():

@@ -11,6 +11,7 @@
   python volume_surge.py --ratio 5          # 5배 이상만
   python volume_surge.py --min-value 10     # 거래대금 10억원 이상만
   python volume_surge.py --universe index   # 코스피200·코스닥150만
+  python volume_surge.py --lookback 10      # 최근 10거래일 급증분까지 추적(급증 후 눌림 표)
 
 결과
   output/volume_surge_YYYYMMDD.csv / .html
@@ -27,6 +28,10 @@ from pathlib import Path
 import pandas as pd
 
 CFG = {
+    "lookback": 10,          # 급증 후 눌림: 며칠 전 급증까지 추적할지(거래일)
+    "pullback_vol": 0.5,     # 급등일 거래량 대비 현재 거래량 비율 상한
+    "pullback_gain": 5.0,    # 급등일 최소 상승률(%)
+    "pullback_floor": -3.0,  # 급등일 종가 대비 현재가 허용 하락폭(%)
     "ratio": 3.0,        # 전일 대비 거래량 배수 하한
     "min_value_eok": 5,  # 기준일 거래대금 하한(억원). 잡음 제거용
     "min_price": 1000,   # 동전주 제외
@@ -131,6 +136,87 @@ def scan(date: str, ratio: float, min_value_eok: float, universe: str = "all") -
     return df, prev
 
 
+def business_days(date: str, n: int) -> list[str]:
+    """기준일 포함, 과거로 n개 거래일."""
+    stock = _pykrx()
+    out, d = [], dt.datetime.strptime(date, "%Y%m%d")
+    while len(out) < n:
+        try:
+            b = stock.get_nearest_business_day_in_a_week(date=d.strftime("%Y%m%d"), prev=True)
+        except Exception:
+            b = d.strftime("%Y%m%d")
+        if b not in out:
+            out.append(b)
+        d = dt.datetime.strptime(b, "%Y%m%d") - dt.timedelta(days=1)
+    return list(reversed(out))
+
+
+def pullback_scan(date: str, ratio: float, min_value_eok: float,
+                  universe: str, lookback: int) -> pd.DataFrame:
+    """최근 급증 뒤, 거래량이 마르며 가격은 버티는 종목."""
+    days = business_days(date, lookback + 1)
+    snaps = {}
+    for d in days:
+        df = snapshot(d)
+        if not df.empty:
+            snaps[d] = df
+        print(f"  {d} 시세 {len(df)}종목")
+    days = [d for d in days if d in snaps]
+    if len(days) < 3:
+        return pd.DataFrame()
+
+    last = days[-1]
+    cur = snaps[last]
+    if universe == "index":
+        members = index_members(last)
+        if members:
+            cur = cur[cur.index.isin(members)]
+
+    rows = []
+    for t in cur.index:
+        c = cur.loc[t]
+        if c["value"] < min_value_eok * 1e8 or c["close"] < CFG["min_price"]:
+            continue
+        best = None
+        # 급등일 후보: 마지막 날과 직전 날은 제외(눌림 기간 2일 이상 확보)
+        for i in range(1, len(days) - 2):
+            d, pd_ = days[i], days[i - 1]
+            if t not in snaps[d].index or t not in snaps[pd_].index:
+                continue
+            row, prev_row = snaps[d].loc[t], snaps[pd_].loc[t]
+            if prev_row["volume"] <= 0:
+                continue
+            surge = row["volume"] / prev_row["volume"]
+            if surge < ratio or row.get("chg", 0) < CFG["pullback_gain"]:
+                continue
+            if best is None or surge > best[1]:
+                best = (d, surge, float(row["close"]), float(row["volume"]))
+        if best is None:
+            continue
+        sd, surge, sclose, svol = best
+        hold = (c["close"] / sclose - 1) * 100
+        vol_cut = c["volume"] / svol
+        if hold < CFG["pullback_floor"] or vol_cut > CFG["pullback_vol"]:
+            continue
+        rows.append({"ticker": t, "surge_date": sd, "surge_ratio": surge,
+                     "surge_close": sclose, "close": float(c["close"]),
+                     "hold": hold, "vol_cut": vol_cut, "chg": float(c.get("chg", 0)),
+                     "value_eok": float(c["value"]) / 1e8, "market": c["market"]})
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(rows).set_index("ticker")
+    stock = _pykrx()
+    names = []
+    for t in out.index:
+        try:
+            names.append(stock.get_market_ticker_name(t))
+        except Exception:
+            names.append(t)
+    out.insert(0, "name", names)
+    return out.sort_values("vol_cut")
+
+
 CSS = """
 :root{--paper:#F2F4F6;--sheet:#FFF;--ink:#17202A;--muted:#5A6572;--rule:#D6DCE3;--up:#C62E2E;--down:#2A58A6}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#12161B;--sheet:#1A2027;--ink:#E6EAEE;
@@ -149,7 +235,8 @@ td.l,th.l{text-align:left}.pos{color:var(--up)}.neg{color:var(--down)}
 """
 
 
-def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: str = "all") -> str:
+def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: str = "all",
+               pull: pd.DataFrame | None = None, lookback: int = 0) -> str:
     d = dt.datetime.strptime(date, "%Y%m%d")
     rows = "".join(
         f'<tr><td class="l">{html.escape(str(r["name"]))}<br>'
@@ -160,6 +247,7 @@ def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: s
         f'<td>{r["volume"]:,.0f}</td><td>{r["prev_volume"]:,.0f}</td>'
         f'<td>{r["value_eok"]:,.0f}억</td></tr>'
         for i, r in df.iterrows())
+    pull_block = pullback_html(pull, lookback) if lookback else ""
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>거래량 급증 {d:%Y-%m-%d}</title><style>{CSS}</style></head><body><main>
@@ -169,7 +257,29 @@ def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: s
 {"코스피200·코스닥150 구성종목" if universe == "index" else "코스피·코스닥 보통주"} 기준이며 ETF는 제외됩니다.</p>
 <div class="wrap"><table><thead><tr><th class="l">종목</th><th>배수</th><th>종가</th><th>등락</th>
 <th>거래량</th><th>전일 거래량</th><th>거래대금</th></tr></thead><tbody>{rows}</tbody></table></div>
+{pull_block}
 </main></body></html>"""
+
+
+def pullback_html(df: pd.DataFrame, lookback: int) -> str:
+    head = (f'<h2>급증 후 눌림</h2><p class="sub">최근 {lookback}거래일 안에 거래량 급증과 함께 '
+            f'{CFG["pullback_gain"]:.0f}% 이상 오른 뒤, 지금은 거래량이 급등일의 '
+            f'{CFG["pullback_vol"]*100:.0f}% 이하로 줄고 가격은 급등일 종가 부근을 지키는 종목입니다.</p>')
+    if df is None or df.empty:
+        return head + '<p class="sub">해당 종목이 없습니다.</p>'
+    rows = "".join(
+        f'<tr><td class="l">{html.escape(str(r["name"]))}<br>'
+        f'<small style="color:var(--muted)">{i} {r["market"]}</small></td>'
+        f'<td>{r["surge_date"][4:6]}/{r["surge_date"][6:]}</td>'
+        f'<td>{r["surge_ratio"]:.1f}배</td>'
+        f'<td>{r["surge_close"]:,.0f}</td>'
+        f'<td class="big">{r["close"]:,.0f}</td>'
+        f'<td class="{"pos" if r["hold"] > 0 else "neg"}">{r["hold"]:+.1f}%</td>'
+        f'<td>{r["vol_cut"]*100:.0f}%</td><td>{r["value_eok"]:,.0f}억</td></tr>'
+        for i, r in df.iterrows())
+    return (head + '<div class="wrap"><table><thead><tr><th class="l">종목</th><th>급등일</th>'
+            '<th>당시 배수</th><th>급등일 종가</th><th>현재가</th><th>유지율</th>'
+            f'<th>거래량 비율</th><th>거래대금</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
 def main():
@@ -179,6 +289,8 @@ def main():
     p.add_argument("--min-value", type=float, default=CFG["min_value_eok"], help="거래대금 하한(억원)")
     p.add_argument("--universe", choices=["all", "index"], default="all",
                    help="all: 코스피·코스닥 전 종목, index: 코스피200·코스닥150")
+    p.add_argument("--lookback", type=int, default=CFG["lookback"],
+                   help="급증 후 눌림 추적 기간(거래일). 0이면 생략")
     p.add_argument("--out", default="output")
     a = p.parse_args()
 
@@ -186,6 +298,10 @@ def main():
         print("[주의] KRX_ID·KRX_PW가 없습니다. 조회가 실패할 수 있습니다.")
 
     df, prev = scan(a.date, a.ratio, a.min_value, a.universe)
+    pull = pd.DataFrame()
+    if a.lookback:
+        print(f"급증 후 눌림 추적 (최근 {a.lookback}거래일)")
+        pull = pullback_scan(a.date, a.ratio, a.min_value, a.universe, a.lookback)
     date = df.attrs.get("date", a.date)
     try:
         date = _pykrx().get_nearest_business_day_in_a_week(date=a.date, prev=True)
@@ -199,11 +315,14 @@ def main():
     html_path = out / f"volume_surge{tag}_{date}.html"
     df.reset_index().rename(columns={"index": "ticker", "티커": "ticker"}).to_csv(
         csv_path, index=False, encoding="utf-8-sig", float_format="%.2f")
-    page = build_html(df, date, prev, a.ratio, a.universe)
+    page = build_html(df, date, prev, a.ratio, a.universe, pull, a.lookback)
     html_path.write_text(page, encoding="utf-8")
     (out / "index.html").write_text(page, encoding="utf-8")   # 항상 최신 결과로 덮어씀
 
-    print(f"{a.ratio:.0f}배 이상: {len(df)}종목")
+    if a.lookback and not pull.empty:
+        pull.reset_index().to_csv(out / f"volume_pullback{tag}_{date}.csv",
+                                  index=False, encoding="utf-8-sig", float_format="%.2f")
+    print(f"{a.ratio:.0f}배 이상: {len(df)}종목 / 급증 후 눌림: {len(pull)}종목")
     for i, r in df.head(15).iterrows():
         print(f"  {r['name']}({i}) {r['ratio']:.1f}배 {r['chg']:+.2f}% 거래대금 {r['value_eok']:,.0f}억")
     print(f"리포트: {html_path}\nCSV: {csv_path}")

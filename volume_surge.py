@@ -231,8 +231,57 @@ table{border-collapse:collapse;width:100%}th,td{padding:8px 10px;border-bottom:1
 th{font-size:13px;color:var(--muted);position:sticky;top:0;background:var(--sheet)}
 td.l,th.l{text-align:left}.pos{color:var(--up)}.neg{color:var(--down)}
 .big{font-weight:700}
-@media (max-width:640px){th,td{padding:7px 6px;font-size:13px}}
+h2{font-size:18px;margin:28px 0 4px}
+.cards{display:none}
+.card{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.card .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.card .nm{font-weight:700;font-size:16px}
+.card .tk{color:var(--muted);font-size:12px;margin-top:2px}
+.card .mult{font-size:22px;font-weight:800;white-space:nowrap}
+.card .px{margin-top:8px;font-size:15px}
+.card .px b{font-size:17px}
+.card dl{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 6px;margin:10px 0 0}
+.card dl div{min-width:0}
+.card dt{color:var(--muted);font-size:11px;margin-bottom:2px}
+.card dd{margin:0;font-size:14px;font-weight:600;white-space:nowrap}
+.sum{background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin:0 0 16px;font-size:14px}
+.sum b{font-size:18px}
+@media (max-width:720px){
+ main{padding:18px 12px 44px}
+ h1{font-size:19px}
+ .wrap{display:none}
+ .cards{display:block}
+}
 """
+
+
+def _surge_cards(df: pd.DataFrame) -> str:
+    cards = "".join(
+        f'<article class="card"><div class="top"><div>'
+        f'<div class="nm">{html.escape(str(r["name"]))}</div><div class="tk">{i} {r["market"]}</div></div>'
+        f'<div class="mult">{r["ratio"]:.1f}배</div></div>'
+        f'<div class="px"><b>{r["close"]:,.0f}원</b> '
+        f'<span class="{"pos" if r["chg"] > 0 else "neg" if r["chg"] < 0 else ""}">{r["chg"]:+.2f}%</span></div>'
+        f'<dl><div><dt>거래량</dt><dd>{r["volume"]/10000:,.0f}만주</dd></div>'
+        f'<div><dt>전일</dt><dd>{r["prev_volume"]/10000:,.1f}만주</dd></div>'
+        f'<div><dt>거래대금</dt><dd>{r["value_eok"]:,.0f}억</dd></div></dl></article>'
+        for i, r in df.iterrows())
+    return f'<div class="cards">{cards}</div>'
+
+
+def _pullback_cards(df: pd.DataFrame) -> str:
+    cards = "".join(
+        f'<article class="card"><div class="top"><div>'
+        f'<div class="nm">{html.escape(str(r["name"]))}</div><div class="tk">{i} {r["market"]}</div></div>'
+        f'<div style="text-align:right"><div class="mult">{r["vol_cut"]*100:.0f}%</div>'
+        f'<div class="tk">급등일 대비 거래량</div></div></div>'
+        f'<div class="px"><b>{r["close"]:,.0f}원</b> '
+        f'<span class="{"pos" if r["hold"] > 0 else "neg"}">급등일 대비 {r["hold"]:+.1f}%</span></div>'
+        f'<dl><div><dt>급등일</dt><dd>{r["surge_date"][4:6]}/{r["surge_date"][6:]}</dd></div>'
+        f'<div><dt>당시 배수</dt><dd>{r["surge_ratio"]:.1f}배</dd></div>'
+        f'<div><dt>급등일 종가</dt><dd>{r["surge_close"]:,.0f}</dd></div></dl></article>'
+        for i, r in df.iterrows())
+    return f'<div class="cards">{cards}</div>'
 
 
 def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: str = "all",
@@ -255,8 +304,12 @@ def build_html(df: pd.DataFrame, date: str, prev: str, ratio: float, universe: s
 <p class="sub">생성 {dt.datetime.now():%Y-%m-%d %H:%M} · {"장중 데이터(미확정)" if dt.datetime.now().strftime("%Y%m%d") == date and dt.datetime.now().hour < 16 else "마감 확정"}</p>
 <p class="sub">직전 거래일({prev[:4]}-{prev[4:6]}-{prev[6:]}) 대비 거래량 {ratio:.0f}배 이상, 거래대금 {CFG['min_value_eok']}억원 이상인 종목 {len(df)}개입니다.
 {"코스피200·코스닥150 구성종목" if universe == "index" else "코스피·코스닥 보통주"} 기준이며 ETF는 제외됩니다.</p>
+<div class="sum"><b>{len(df)}종목</b> 급증 · 상승 {int((df["chg"] > 0).sum())} / 하락 {int((df["chg"] < 0).sum())} ·
+10배 이상 {int((df["ratio"] >= 10).sum())}종목</div>
+<h2>급증 종목</h2>
 <div class="wrap"><table><thead><tr><th class="l">종목</th><th>배수</th><th>종가</th><th>등락</th>
 <th>거래량</th><th>전일 거래량</th><th>거래대금</th></tr></thead><tbody>{rows}</tbody></table></div>
+{_surge_cards(df)}
 {pull_block}
 </main></body></html>"""
 
@@ -279,7 +332,8 @@ def pullback_html(df: pd.DataFrame, lookback: int) -> str:
         for i, r in df.iterrows())
     return (head + '<div class="wrap"><table><thead><tr><th class="l">종목</th><th>급등일</th>'
             '<th>당시 배수</th><th>급등일 종가</th><th>현재가</th><th>유지율</th>'
-            f'<th>거래량 비율</th><th>거래대금</th></tr></thead><tbody>{rows}</tbody></table></div>')
+            f'<th>거래량 비율</th><th>거래대금</th></tr></thead><tbody>{rows}</tbody></table></div>'
+            + _pullback_cards(df))
 
 
 def main():

@@ -57,6 +57,7 @@ CFG = {
     "regime_mult": {"up": 1.0, "mid": 0.5, "down": 0.25, "unknown": 0.5},
     "watch_trigger_days": 5,     # 관찰 후보 돌파 대기 기간(거래일)
     "history_file": "history.csv",
+    "watchlist_file": "watchlist.csv",   # group,ticker,name — 없으면 관심종목 섹션 생략
     "etf_top_n": 30,             # 거래대금 상위 ETF 수 (0이면 ETF 분석 생략)
     "etf_value_days": 5,         # 거래대금 순위: 최근 5거래일 평균
     # 추세 매매에 맞지 않는 ETF 제외(이름에 포함되면 제외). 레버리지를 보고 싶으면 목록에서 지우세요.
@@ -255,12 +256,15 @@ def trend_checks(r: pd.Series, ma200_20ago: float) -> dict:
     }
 
 
-def analyze(df: pd.DataFrame) -> dict | None:
+def analyze(df: pd.DataFrame, relaxed: bool = False) -> dict | None:
+    """relaxed=True면 거래대금 하한을 적용하지 않음(관심종목용)."""
     if df is None or len(df) < 210:
         return None
     df = add_indicators(df)
     r = df.iloc[-1]
-    if pd.isna(r.ma200) or pd.isna(r.pivot) or r.value20 < CFG["min_value_20d"]:
+    if pd.isna(r.ma200) or pd.isna(r.pivot):
+        return None
+    if not relaxed and r.value20 < CFG["min_value_20d"]:
         return None
 
     checks = trend_checks(r, df["ma200"].iloc[-21])
@@ -515,6 +519,52 @@ def history_summary(hist: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_watchlist(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path, dtype=str).fillna("")
+    df.columns = [c.strip().lower() for c in df.columns]
+    if "ticker" not in df.columns:
+        print("[경고] 관심종목 파일에 ticker 열이 없습니다.")
+        return pd.DataFrame()
+    df["ticker"] = df["ticker"].str.strip().str.zfill(6)
+    df["group"] = df.get("group", "관심종목").replace("", "관심종목")
+    df["name_hint"] = df.get("name", "")
+    return df.drop_duplicates("ticker")
+
+
+def watch_rows(wl: pd.DataFrame, res: pd.DataFrame, start: str, date: str) -> pd.DataFrame:
+    """관심종목 현황. 이미 분석된 종목은 재사용하고, 나머지는 새로 계산."""
+    stock = _pykrx()
+    done = res.set_index("ticker") if len(res) else pd.DataFrame()
+    rows = []
+    for w in wl.itertuples():
+        if len(done) and w.ticker in done.index:
+            a = done.loc[w.ticker].to_dict()
+        else:
+            a = analyze(get_ohlcv(w.ticker, start, date), relaxed=True)
+            time.sleep(CFG["request_pause"])
+            if not a:
+                print(f"[관심종목] {w.name_hint or w.ticker} 데이터 부족")
+                continue
+            a["rs_pct"] = np.nan
+        try:
+            name = stock.get_market_ticker_name(w.ticker)
+        except Exception:
+            name = w.name_hint or w.ticker
+        if w.name_hint and name and w.name_hint.strip() != str(name).strip():
+            print(f"[관심종목] 이름 불일치: 파일 {w.name_hint} / 실제 {name} ({w.ticker})")
+        rows.append({**a, "ticker": w.ticker, "name": name, "group": w.group})
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    base = np.sort(res["rs_raw"].dropna().values) if len(res) else np.array([])
+    fill = [np.searchsorted(base, v) / max(len(base), 1) * 99 if len(base) and not np.isnan(v) else np.nan
+            for v in out["rs_raw"]]
+    out["rs_pct"] = out["rs_pct"].fillna(pd.Series(fill, index=out.index))
+    return out
+
+
 # ─────────────────────────── 리포트 ───────────────────────────
 CSS = """
 :root{--paper:#F2F4F6;--sheet:#FFFFFF;--ink:#17202A;--muted:#5A6572;--rule:#D6DCE3;
@@ -718,8 +768,32 @@ def _etf_html(etf: pd.DataFrame) -> str:
     return head + "".join(parts) + overview + "</section>"
 
 
+def _watch_html(w: pd.DataFrame | None) -> str:
+    if w is None or w.empty:
+        return ""
+    head = ('<section><h2>관심종목</h2><p class="desc">직접 등록한 종목의 현황입니다. 거래대금 조건을 적용하지 않아 '
+            '후보에 못 드는 종목도 모두 보여줍니다. 피벗까지 거리가 짧고 추세가 좋은 종목부터 보세요.</p>')
+    parts = []
+    for g, sub in w.groupby("group", sort=False):
+        sub = sub.sort_values("ext", ascending=False)
+        rows = "".join(
+            f'<tr><td class="l">{html.escape(str(r["name"]))}</td>'
+            f'<td>{r.close:,.0f}</td>'
+            f'<td class="{"pos" if r.chg > 0 else "neg" if r.chg < 0 else ""}">{r.chg:+.2f}%</td>'
+            f'<td>{"-" if pd.isna(r.rs_pct) else f"{r.rs_pct:.0f}"}</td>'
+            f'<td>{r.trend_n}/6</td><td>{round(r.from_high) + 0:.0f}%</td>'
+            f'<td>{r.ext:+.1f}%</td><td>{r.atr_pct:.1f}%</td>'
+            f'<td class="l">{r.setup if isinstance(r.setup, str) else (html.escape(r.note) if isinstance(r.note, str) and r.note else "-")}</td></tr>'
+            for _, r in sub.iterrows())
+        parts.append(f'<h3>{html.escape(str(g))}</h3><div class="wrap hist"><table class="small etf"><thead><tr>'
+                     '<th class="l">종목</th><th>종가</th><th>등락</th><th>RS</th><th>추세</th>'
+                     '<th>고점대비</th><th>피벗대비</th><th>ATR</th><th class="l">상태</th>'
+                     f'</tr></thead><tbody>{rows}</tbody></table></div>')
+    return head + "".join(parts) + "</section>"
+
+
 def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: int,
-               hist: pd.DataFrame | None = None) -> str:
+               hist: pd.DataFrame | None = None, watch: pd.DataFrame | None = None) -> str:
     d = dt.datetime.strptime(date, "%Y%m%d")
     now = dt.datetime.now()
     if now.strftime("%Y%m%d") != date or now.hour >= 18:
@@ -747,6 +821,7 @@ def build_html(date: str, regimes: dict, res: pd.DataFrame, n_total: int, n_ok: 
         f"{_table(stocks[stocks.setup == k].sort_values('score', ascending=False).head(15), k)}</section>"
         for k, t in secs)
     body += _etf_html(res[res.universe == "ETF"])
+    body += _watch_html(watch)
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스윙 후보 {d:%Y-%m-%d}</title><style>{CSS}</style></head><body><main>
@@ -848,12 +923,18 @@ def run(date: str, out_dir: Path, use_flow: bool = True) -> Path:
     html_path = out_dir / f"swing_{date}.html"
     res.sort_values("score", ascending=False).drop(columns=["rs_raw"]).to_csv(
         csv_path, index=False, encoding="utf-8-sig", float_format="%.2f")
+    watch = pd.DataFrame()
+    wl = load_watchlist(Path(CFG["watchlist_file"]))
+    if len(wl):
+        print(f"관심종목 {len(wl)}종목 확인 중...")
+        watch = watch_rows(wl, res, start, date)
+
     try:
         hist = update_history(out_dir / CFG["history_file"], date, res)
     except Exception as e:  # 기록 실패가 리포트 생성을 막지 않도록
         print(f"[경고] 성과 기록 갱신 실패: {e}")
         hist = None
-    html_path.write_text(build_html(date, regimes, res, len(uni), int((res.universe != "ETF").sum()), hist), encoding="utf-8")
+    html_path.write_text(build_html(date, regimes, res, len(uni), int((res.universe != "ETF").sum()), hist, watch), encoding="utf-8")
 
     for k in ("돌파", "눌림", "관찰"):
         sub = res[(res.setup == k) & (res.universe != "ETF")].sort_values("score", ascending=False).head(5)
